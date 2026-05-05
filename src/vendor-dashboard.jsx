@@ -1329,23 +1329,34 @@ export default function App() {
         input:focus,select:focus,textarea:focus{outline:none;border-color:#e07b39!important;}
         ::-webkit-scrollbar{width:6px;} ::-webkit-scrollbar-track{background:#0d1117;} ::-webkit-scrollbar-thumb{background:#2a2f3d;border-radius:99px;}
         @keyframes spin{to{transform:rotate(360deg);}}
+        /* Mobile bottom nav */
+        .bottom-nav { display:none; }
+        .top-nav-tabs { display:flex; }
+        @media(max-width:640px){
+          .bottom-nav { display:flex; position:fixed; bottom:0; left:0; right:0; background:#0d1117; border-top:1px solid #1e2430; z-index:200; padding-bottom:env(safe-area-inset-bottom); }
+          .bottom-nav-item { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:8px 4px 6px; border:none; background:none; cursor:pointer; gap:3px; min-height:56px; }
+          .bottom-nav-label { font-size:10px; font-weight:500; letter-spacing:0.02em; }
+          .top-nav-tabs { display:none; }
+          .top-nav-user { display:none; }
+          .page-content { padding-bottom:80px !important; }
+        }
       `}</style>
       <div style={{ fontFamily:"'DM Sans',sans-serif",background:"#0a0c12",minHeight:"100vh",color:"#e8eaf0" }}>
-        {/* Nav */}
+
+        {/* Top bar — desktop only */}
         <div style={{ background:"#0d1117",borderBottom:"1px solid #1e2430",padding:"0 1.5rem",display:"flex",alignItems:"center",height:"56px",position:"sticky",top:0,zIndex:100 }}>
           <div style={{ display:"flex",alignItems:"center",gap:"0.6rem",marginRight:"2rem",flexShrink:0 }}>
             <div style={{ width:"28px",height:"28px",background:"#e07b39",borderRadius:"7px",display:"flex",alignItems:"center",justifyContent:"center" }}><Icon name="home" size={14}/></div>
             <span style={{ fontWeight:700,fontSize:"0.95rem",color:"#e8eaf0" }}>PropTrack</span>
           </div>
-          <nav style={{ display:"flex",gap:"0.25rem",overflowX:"auto",flex:1 }}>
+          <nav className="top-nav-tabs" style={{ gap:"0.25rem",overflowX:"auto",flex:1 }}>
             {tabs.map(t=>(
               <button key={t.id} onClick={()=>setTab(t.id)} style={{ display:"flex",alignItems:"center",gap:"6px",background:tab===t.id?"#1e2430":"none",border:"none",color:tab===t.id?"#e8eaf0":"#6b7280",borderRadius:"7px",padding:"0.4rem 0.75rem",cursor:"pointer",fontSize:"0.83rem",fontWeight:tab===t.id?600:400,whiteSpace:"nowrap",flexShrink:0 }}>
                 <Icon name={t.icon} size={14}/>{t.label}
               </button>
             ))}
           </nav>
-          {/* User info + logout */}
-          <div style={{ display:"flex",alignItems:"center",gap:"0.75rem",marginLeft:"auto",flexShrink:0 }}>
+          <div className="top-nav-user" style={{ display:"flex",alignItems:"center",gap:"0.75rem",marginLeft:"auto",flexShrink:0 }}>
             <span style={{ fontSize:"0.75rem",color:"#6b7280",display:"flex",alignItems:"center",gap:"4px" }}>
               {isAdmin&&<Icon name="shield" size={11}/>}{profile?.full_name||session.user.email}
             </span>
@@ -1360,7 +1371,8 @@ export default function App() {
           <AdminBanner profiles={profiles} viewingAs={viewingAs} setViewingAs={(p)=>{ setViewingAs(p); setTab("dashboard"); }}/>
         )}
 
-        <div style={{ maxWidth:"980px",margin:"0 auto",padding:"1.75rem 1.25rem" }}>
+        {/* Page content */}
+        <div className="page-content" style={{ maxWidth:"980px",margin:"0 auto",padding:"1.75rem 1.25rem" }}>
           {tab==="dashboard"   && <Dashboard properties={properties} invoices={invoices} vendors={vendors} tenants={tenants} projects={projects} isAdmin={isAdmin} viewingAs={viewingAs}/>}
           {tab==="properties"  && <Properties properties={properties} isAdmin={isAdmin} viewingAs={viewingAs} onAdd={addProperty} onUpdate={updateProperty} onDelete={deleteProperty} invoices={invoices} tenants={tenants}/>}
           {tab==="tenants"     && <Tenants tenants={tenants} properties={properties} viewingAs={viewingAs} onAdd={addTenant} onUpdate={updateTenant} onDelete={deleteTenant}/>}
@@ -1369,6 +1381,24 @@ export default function App() {
           {tab==="projects"    && <Projects projects={projects} properties={properties} vendors={vendors} invoices={invoices} viewingAs={viewingAs} isAdmin={isAdmin} onAdd={addProject} onUpdate={updateProject} onDelete={deleteProject} onAddInvoice={addInvoice}/>}
           {tab==="members"     && isAdmin && <MembersTab profiles={profiles} currentUser={profile} onRoleChange={handleRoleChange}/>}
         </div>
+
+        {/* Mobile bottom nav */}
+        <nav className="bottom-nav">
+          {tabs.map(t=>(
+            <button key={t.id} className="bottom-nav-item" onClick={()=>setTab(t.id)}
+              style={{ color:tab===t.id?"#e07b39":"#4b5563" }}>
+              <Icon name={t.icon} size={22}/>
+              <span className="bottom-nav-label">{t.label}</span>
+            </button>
+          ))}
+          {/* Sign out on mobile */}
+          <button className="bottom-nav-item" onClick={()=>supabase.auth.signOut()}
+            style={{ color:"#4b5563" }}>
+            <Icon name="logout" size={22}/>
+            <span className="bottom-nav-label">Sign out</span>
+          </button>
+        </nav>
+
       </div>
     </>
   );
