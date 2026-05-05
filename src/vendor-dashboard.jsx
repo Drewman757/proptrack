@@ -1332,7 +1332,7 @@ export default function App() {
         /* Mobile bottom nav */
         .bottom-nav { display:none; }
         .top-nav-tabs { display:flex; }
-        @media(max-width:640px){
+        @media(max-width:768px){
           .bottom-nav { display:flex; position:fixed; bottom:0; left:0; right:0; background:#0d1117; border-top:1px solid #1e2430; z-index:200; padding-bottom:env(safe-area-inset-bottom); }
           .bottom-nav-item { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:8px 4px 6px; border:none; background:none; cursor:pointer; gap:3px; min-height:56px; }
           .bottom-nav-label { font-size:10px; font-weight:500; letter-spacing:0.02em; }
