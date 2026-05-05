@@ -66,7 +66,6 @@ function rowToVendor(r) {
 }
 function rowToInvoice(r) {
   return { id:r.id, ownerId:r.owner_id, propertyId:r.property_id||"", vendorId:r.vendor_id||"", projectId:r.project_id||"", category:r.category||CATEGORIES[0], amount:r.amount||"", date:r.date||"", description:r.description||"", fileName:r.file_name||null, fileUrl:r.file_url||null, filePath:r.file_path||null, invoiceNumber:r.invoice_number||null, ownerEmail:r.owner_email, ownerName:r.owner_name };
-};
 }
 function rowToProject(r) {
   return { id:r.id, ownerId:r.owner_id, propertyId:r.property_id||"", name:r.name, description:r.description||"", status:r.status||"Planning", startDate:r.start_date||"", endDate:r.end_date||"", vendorIds:r.vendor_ids||[], tasks:r.tasks||[], ownerEmail:r.owner_email, ownerName:r.owner_name };
@@ -334,8 +333,9 @@ Return this exact JSON:
 {"vendorId":null,"vendorNameRaw":"","propertyId":null,"projectId":null,"amount":0,"date":"YYYY-MM-DD","category":"Other","description":"","invoiceNumber":null,"confidence":"medium"}`;
 
   const body = { model:"claude-sonnet-4-20250514", max_tokens:800, messages:[{ role:"user", content:[{ type:isPdf?"document":"image", source:{ type:"base64", media_type:file.type, data:b64 } },{ type:"text", text:prompt }] }] };
-  const resp = await fetch("https://api.anthropic.com/v1/messages",{ method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body) });
-  if (!resp.ok) throw new Error(`API error ${resp.status}`);
+  const edgeFnUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/dynamic-worker`;
+  const resp = await fetch(edgeFnUrl, { method:"POST", headers:{"Content-Type":"application/json","Authorization":`Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`}, body:JSON.stringify(body) });
+  if (!resp.ok) { const errText = await resp.text().catch(()=>""); throw new Error(`API error ${resp.status}${errText?" — "+errText:""}`); }
   const data = await resp.json();
   const text = data.content?.map(c=>c.text||"").join("")||"";
   return JSON.parse(text.replace(/```json|```/g,"").trim());
