@@ -1086,17 +1086,39 @@ function Invoices({ invoices, properties, vendors, projects, viewingAs, isAdmin,
   const [filterCat, setFilterCat] = useState("all");
   const fileRef = useRef();
   const readOnly = !!viewingAs;
-  const blank = { propertyId:properties[0]?.id||"",vendorId:"",category:CATEGORIES[0],amount:"",date:new Date().toISOString().slice(0,10),description:"",fileName:null,recurring:"one-time" };
+  const blank = { propertyId:properties[0]?.id||"",vendorId:"",category:CATEGORIES[0],amount:"",date:new Date().toISOString().slice(0,10),description:"",invoiceNumber:"",fileName:null,fileUrl:null,filePath:null,recurring:"one-time" };
   const [form, setForm] = useState(blank);
+  const [uploading, setUploading] = useState(false);
+  const [pendingFile, setPendingFile] = useState(null); // file staged for upload on save
+  const fileRef = useRef();
 
   async function handleSave() {
     if (!form.propertyId||!form.amount||!form.date) return;
-    if (modal==="add") await onAdd(form); else await onUpdate({...form,id:modal.id});
+    let finalForm = {...form};
+    if (pendingFile) {
+      setUploading(true);
+      try {
+        // Remove old file if replacing
+        if (finalForm.filePath) await deleteFile(finalForm.filePath);
+        const uploaded = await uploadFile(pendingFile, "invoices");
+        finalForm.fileName = uploaded.name;
+        finalForm.fileUrl = uploaded.url;
+        finalForm.filePath = uploaded.path;
+      } catch(e) { console.error("Upload failed", e); }
+      finally { setUploading(false); }
+    }
+    if (modal==="add") await onAdd(finalForm); else await onUpdate({...finalForm,id:modal.id});
+    setPendingFile(null);
     setModal(null);
   }
   async function handleDelete(id) {
     if (!confirm("Delete this invoice?")) return;
     await onDelete(id); setModal(null);
+  }
+  function openModal(inv) {
+    setForm({...inv});
+    setPendingFile(null);
+    setModal(inv);
   }
 
   const filtered = invoices.filter(i=>{
@@ -1118,7 +1140,7 @@ function Invoices({ invoices, properties, vendors, projects, viewingAs, isAdmin,
             <option value="all">All Categories</option>
             {CATEGORIES.map(c=><option key={c}>{c}</option>)}
           </select>
-          {!readOnly && <BtnPrimary onClick={()=>{setForm({...blank,propertyId:properties[0]?.id||""});setModal("add");}}><Icon name="plus" size={14}/>Add Invoice</BtnPrimary>}
+          {!readOnly && <BtnPrimary onClick={()=>{setForm({...blank,propertyId:properties[0]?.id||""});setPendingFile(null);setModal("add");}}><Icon name="plus" size={14}/>Add Invoice</BtnPrimary>}
         </div>
       </div>
 
@@ -1136,12 +1158,13 @@ function Invoices({ invoices, properties, vendors, projects, viewingAs, isAdmin,
           const proj = projects.find(p=>p.id===inv.projectId);
           const rec = RECURRING_OPTIONS.find(r=>r.value===inv.recurring)||RECURRING_OPTIONS[0];
           return (
-            <div key={inv.id} onClick={()=>!readOnly&&(setForm({...inv}),setModal(inv))} style={{ display:"flex",alignItems:"center",padding:"0.85rem 1.25rem",borderBottom:"1px solid #1a1f2b",cursor:readOnly?"default":"pointer" }}
+            <div key={inv.id} onClick={()=>!readOnly&&openModal(inv)} style={{ display:"flex",alignItems:"center",padding:"0.85rem 1.25rem",borderBottom:"1px solid #1a1f2b",cursor:readOnly?"default":"pointer" }}
               onMouseEnter={e=>!readOnly&&(e.currentTarget.style.background="#1a1f2b")} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
               <div style={{ width:"4px",height:"36px",borderRadius:"99px",background:prop?.color||"#6b7280",marginRight:"1rem",flexShrink:0 }}/>
               <div style={{ flex:1,minWidth:0 }}>
                 <div style={{ display:"flex",alignItems:"center",gap:"0.5rem",marginBottom:"0.2rem",flexWrap:"wrap" }}>
                   <span style={{ fontSize:"0.88rem",fontWeight:600,color:"#e8eaf0" }}>{vend?.name||"Unknown Vendor"}</span>
+                  {inv.invoiceNumber&&<span style={{ fontSize:"0.72rem",color:"#6b7280",fontFamily:"'DM Mono',monospace" }}>#{inv.invoiceNumber}</span>}
                   <span style={{ fontSize:"0.68rem",background:"#1e2430",color:"#6b7280",borderRadius:"4px",padding:"1px 6px" }}>{inv.category}</span>
                   {inv.recurring&&inv.recurring!=="one-time"&&<span style={{ fontSize:"0.65rem",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em",color:rec.color,background:rec.color+"22",border:`1px solid ${rec.color}44`,borderRadius:"99px",padding:"1px 7px" }}>↻ {rec.label}</span>}
                   {proj&&<span style={{ fontSize:"0.68rem",background:"#3b6fa022",color:"#3b6fa0",border:"1px solid #3b6fa044",borderRadius:"4px",padding:"1px 6px",display:"flex",alignItems:"center",gap:"3px" }}><Icon name="clipboard" size={9}/>{proj.name}</span>}
@@ -1157,7 +1180,7 @@ function Invoices({ invoices, properties, vendors, projects, viewingAs, isAdmin,
       </div>
 
       {modal && !readOnly && (
-        <Modal title={modal==="add"?"Add Invoice":"Edit Invoice"} onClose={()=>setModal(null)}>
+        <Modal title={modal==="add"?"Add Invoice":"Edit Invoice"} onClose={()=>{setModal(null);setPendingFile(null);}} wide>
           <Grid2>
             <Field label="Property"><select style={inputStyle} value={form.propertyId} onChange={e=>setForm(f=>({...f,propertyId:e.target.value}))}><option value="">Select…</option>{properties.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></Field>
             <Field label="Vendor"><select style={inputStyle} value={form.vendorId} onChange={e=>setForm(f=>({...f,vendorId:e.target.value}))}><option value="">Select…</option>{vendors.map(v=><option key={v.id} value={v.id}>{v.name}</option>)}</select></Field>
@@ -1166,7 +1189,10 @@ function Invoices({ invoices, properties, vendors, projects, viewingAs, isAdmin,
             <Field label="Category"><select style={inputStyle} value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))}>{CATEGORIES.map(c=><option key={c}>{c}</option>)}</select></Field>
             <Field label="Amount ($)"><input style={inputStyle} type="number" value={form.amount} onChange={e=>setForm(f=>({...f,amount:e.target.value}))} placeholder="0.00"/></Field>
           </Grid2>
-          <Field label="Date"><input style={inputStyle} type="date" value={form.date} onChange={e=>setForm(f=>({...f,date:e.target.value}))}/></Field>
+          <Grid2>
+            <Field label="Date"><input style={inputStyle} type="date" value={form.date} onChange={e=>setForm(f=>({...f,date:e.target.value}))}/></Field>
+            <Field label="Invoice #"><input style={inputStyle} value={form.invoiceNumber||""} onChange={e=>setForm(f=>({...f,invoiceNumber:e.target.value}))} placeholder="e.g. INV-0042"/></Field>
+          </Grid2>
           <Field label="Description"><input style={inputStyle} value={form.description} onChange={e=>setForm(f=>({...f,description:e.target.value}))} placeholder="Brief description…"/></Field>
           <Field label="Recurring">
             <div style={{ display:"flex",gap:"0.5rem",flexWrap:"wrap" }}>
@@ -1188,9 +1214,38 @@ function Invoices({ invoices, properties, vendors, projects, viewingAs, isAdmin,
               </>}
             </select>
           </Field>
-          <div style={{ display:"flex",gap:"0.75rem",justifyContent:"flex-end" }}>
+
+          {/* File attachment */}
+          <SectionDivider label="Attachment"/>
+          <input ref={fileRef} type="file" accept=".pdf,.jpg,.jpeg,.png" style={{ display:"none" }}
+            onChange={e=>{ const f=e.target.files[0]; if(f){ setPendingFile(f); setForm(ff=>({...ff,fileName:f.name})); } e.target.value=""; }}/>
+          {(pendingFile||form.fileUrl) ? (
+            <div style={{ background:"#0d1117",border:"1px solid #2a2f3d",borderRadius:"8px",padding:"0.65rem 1rem",display:"flex",alignItems:"center",gap:"0.75rem",marginBottom:"0.5rem" }}>
+              <Icon name="file" size={14}/>
+              <div style={{ flex:1,minWidth:0 }}>
+                <div style={{ fontSize:"0.82rem",color:"#e8eaf0",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>
+                  {pendingFile ? pendingFile.name : form.fileName||"Attached file"}
+                </div>
+                {pendingFile && <div style={{ fontSize:"0.68rem",color:"#b45309",marginTop:"1px" }}>Pending — will upload on save</div>}
+                {!pendingFile && form.fileUrl && <a href={form.fileUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize:"0.68rem",color:"#3b6fa0",textDecoration:"none" }}>View current file ↗</a>}
+              </div>
+              <div style={{ display:"flex",gap:"0.4rem",flexShrink:0 }}>
+                <button onClick={()=>fileRef.current?.click()} style={{ fontSize:"0.72rem",padding:"3px 8px",borderRadius:"5px",border:"1px solid #2a2f3d",background:"#1e2430",color:"#94a3b8",cursor:"pointer" }}>Replace</button>
+                <button onClick={()=>{ setPendingFile(null); setForm(f=>({...f,fileName:null,fileUrl:null,filePath:null})); }} style={{ fontSize:"0.72rem",padding:"3px 8px",borderRadius:"5px",border:"1px solid #3d1515",background:"#1c0808",color:"#f87171",cursor:"pointer" }}>Remove</button>
+              </div>
+            </div>
+          ) : (
+            <button onClick={()=>fileRef.current?.click()} style={{ width:"100%",background:"#0d1117",border:"1px dashed #2a2f3d",borderRadius:"8px",padding:"0.65rem",color:"#6b7280",cursor:"pointer",fontSize:"0.82rem",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.5rem",marginBottom:"0.5rem" }}>
+              <Icon name="upload" size={13}/>Attach PDF or image
+            </button>
+          )}
+
+          <div style={{ display:"flex",gap:"0.75rem",justifyContent:"flex-end",marginTop:"0.5rem" }}>
             {modal!=="add"&&<BtnDanger onClick={()=>handleDelete(modal.id)}><Icon name="trash" size={14}/>Delete</BtnDanger>}
-            <button onClick={handleSave} style={{ background:"#e07b39",color:"#fff",border:"none",borderRadius:"8px",padding:"0.5rem 1.25rem",cursor:"pointer",fontSize:"0.85rem",fontWeight:600,marginLeft:"auto" }}>Save Invoice</button>
+            <BtnPrimary onClick={handleSave} disabled={uploading}>
+              {uploading&&<Spinner/>}
+              {uploading?"Uploading…":"Save Invoice"}
+            </BtnPrimary>
           </div>
         </Modal>
       )}
@@ -1695,7 +1750,7 @@ export default function App() {
     if (data) setInvoices(i=>[...i,rowToInvoice(data)]);
   }
   async function updateInvoice(form) {
-    const { data } = await supabase.from("invoices").update({ property_id:form.propertyId||null,vendor_id:form.vendorId||null,project_id:form.projectId||null,category:form.category,amount:form.amount||null,date:form.date||null,description:form.description,recurring:form.recurring||"one-time" }).eq("id",form.id).select().single();
+    const { data } = await supabase.from("invoices").update({ property_id:form.propertyId||null,vendor_id:form.vendorId||null,project_id:form.projectId||null,category:form.category,amount:form.amount||null,date:form.date||null,description:form.description,recurring:form.recurring||"one-time",invoice_number:form.invoiceNumber||null,file_name:form.fileName||null,file_url:form.fileUrl||null,file_path:form.filePath||null }).eq("id",form.id).select().single();
     if (data) setInvoices(i=>i.map(x=>x.id===data.id?rowToInvoice(data):x));
   }
   async function deleteInvoice(id) {
