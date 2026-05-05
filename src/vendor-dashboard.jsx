@@ -1084,7 +1084,6 @@ function Invoices({ invoices, properties, vendors, projects, viewingAs, isAdmin,
   const [modal, setModal] = useState(null);
   const [filterProp, setFilterProp] = useState("all");
   const [filterCat, setFilterCat] = useState("all");
-  const fileRef = useRef();
   const readOnly = !!viewingAs;
   const blank = { propertyId:properties[0]?.id||"",vendorId:"",category:CATEGORIES[0],amount:"",date:new Date().toISOString().slice(0,10),description:"",invoiceNumber:"",fileName:null,fileUrl:null,filePath:null,recurring:"one-time" };
   const [form, setForm] = useState(blank);
