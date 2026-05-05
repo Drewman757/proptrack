@@ -59,6 +59,22 @@ function leaseStatus(start, end) {
 function leaseLabel(s) { return {active:"Active",expiring:"Expiring Soon",expired:"Expired",unknown:"No Dates"}[s]; }
 function leaseColor(s) { return {active:"#4a7c59",expiring:"#b45309",expired:"#9b1c1c",unknown:"#374151"}[s]; }
 
+// Returns actual months in a lease (seasonal-aware)
+function leaseMonths(start, end) {
+  if (!start || !end) return 12;
+  const s = new Date(start); const e = new Date(end);
+  const months = (e.getFullYear() - s.getFullYear()) * 12 + (e.getMonth() - s.getMonth()) + 1;
+  return Math.max(1, months);
+}
+// Total rent over the actual lease term
+function leaseTotalRent(t) {
+  return Number(t.monthlyRent||0) * leaseMonths(t.leaseStart, t.leaseEnd);
+}
+// Seasonal = lease shorter than 10 months
+function isSeasonal(t) {
+  return !!(t.leaseStart && t.leaseEnd && leaseMonths(t.leaseStart, t.leaseEnd) < 10);
+}
+
 // ─── Supabase data helpers ────────────────────────────────────────────────────
 // Translates snake_case DB rows → camelCase app objects
 function rowToProperty(r) {
@@ -494,13 +510,14 @@ function InvoiceDropZone({ vendors, properties, projects, onConfirm }) {
 function Dashboard({ properties, invoices, vendors, tenants, projects, isAdmin, viewingAs }) {
   const grandExpense = invoices.reduce((s,i)=>s+Number(i.amount),0);
   const activeTenants = tenants.filter(t=>leaseStatus(t.leaseStart,t.leaseEnd)==="active");
-  const monthlyIncome = activeTenants.reduce((s,t)=>s+Number(t.monthlyRent||0),0);
+  // Total rent = sum of actual lease totals (seasonal uses real months, annual uses 12)
+  const totalRentIncome = activeTenants.reduce((s,t)=>s+leaseTotalRent(t),0);
   const expiringCount = tenants.filter(t=>leaseStatus(t.leaseStart,t.leaseEnd)==="expiring").length;
   const activeProjects = projects.filter(p=>p.status==="In Progress").length;
 
   const propTotals = properties.map(p=>({ ...p,
     expense: invoices.filter(i=>i.propertyId===p.id).reduce((s,i)=>s+Number(i.amount),0),
-    income: tenants.filter(t=>t.propertyId===p.id&&leaseStatus(t.leaseStart,t.leaseEnd)==="active").reduce((s,t)=>s+Number(t.monthlyRent||0),0)*12,
+    income: tenants.filter(t=>t.propertyId===p.id&&leaseStatus(t.leaseStart,t.leaseEnd)==="active").reduce((s,t)=>s+leaseTotalRent(t),0),
   }));
   const byCategory = CATEGORIES.map(cat=>({ cat, total:invoices.filter(i=>i.category===cat).reduce((s,i)=>s+Number(i.amount),0) })).filter(x=>x.total>0).sort((a,b)=>b.total-a.total);
   const recent = [...invoices].sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,5);
@@ -515,7 +532,7 @@ function Dashboard({ properties, invoices, vendors, tenants, projects, isAdmin, 
       <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(148px,1fr))",gap:"1rem",marginBottom:"1.75rem" }}>
         {[
           { label:"Total Expenses", value:fmt(grandExpense), accent:"#e07b39" },
-          { label:"Annual Rent Income", value:fmt(monthlyIncome*12), accent:"#4a7c59" },
+          { label:"Rent Income", value:fmt(totalRentIncome), accent:"#4a7c59" },
           { label:"Active Tenants", value:activeTenants.length, accent:"#3b6fa0" },
           { label:"Properties", value:properties.length, accent:"#8b5cf6" },
           { label:"Active Projects", value:activeProjects, accent:"#b45309" },
@@ -543,7 +560,7 @@ function Dashboard({ properties, invoices, vendors, tenants, projects, isAdmin, 
                 <div style={{ flex:p.expense||1,background:"#e07b39",borderRadius:"0 99px 99px 0",opacity:0.8 }}/>
               </div>
               <div style={{ display:"flex",justifyContent:"space-between",marginTop:"0.25rem" }}>
-                <span style={{ fontSize:"0.67rem",color:"#4a7c59" }}>↑ {fmt(p.income)} rent/yr</span>
+                <span style={{ fontSize:"0.67rem",color:"#4a7c59" }}>↑ {fmt(p.income)} rent</span>
                 <span style={{ fontSize:"0.67rem",color:"#e07b39" }}>↓ {fmt(p.expense)} exp</span>
               </div>
             </div>
@@ -743,14 +760,14 @@ function Properties({ properties, isAdmin, viewingAs, onAdd, onUpdate, onDelete,
         {properties.map(p=>{
           const spent = invoices.filter(i=>i.propertyId===p.id).reduce((s,i)=>s+Number(i.amount),0);
           const active = tenants.filter(t=>t.propertyId===p.id&&leaseStatus(t.leaseStart,t.leaseEnd)==="active");
-          const monthlyRent = active.reduce((s,t)=>s+Number(t.monthlyRent||0),0);
+          const leaseIncome = active.reduce((s,t)=>s+leaseTotalRent(t),0);
           return (
             <div key={p.id} onClick={()=>!readOnly&&openEdit(p)} style={{ background:"#14181f",border:"1px solid #1e2430",borderRadius:"12px",padding:"1.25rem",borderTop:`3px solid ${p.color}`,cursor:readOnly?"default":"pointer" }}>
               <div style={{ fontSize:"1rem",fontWeight:700,color:"#e8eaf0",marginBottom:"0.2rem" }}>{p.name}</div>
               <div style={{ fontSize:"0.78rem",color:"#6b7280" }}>{p.city}, {p.state}</div>
               <div style={{ fontSize:"0.74rem",color:"#4b5563" }}>{p.address}</div>
               <div style={{ marginTop:"1rem",paddingTop:"0.75rem",borderTop:"1px solid #1a1f2b",display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:"0.5rem" }}>
-                {[{l:"Expenses",v:fmt(spent),c:"#e07b39"},{l:"Mo. Rent",v:fmt(monthlyRent),c:"#4a7c59"},{l:"Tenants",v:active.length,c:"#3b6fa0"}].map(x=>(
+                {[{l:"Expenses",v:fmt(spent),c:"#e07b39"},{l:"Lease Income",v:fmt(leaseIncome),c:"#4a7c59"},{l:"Tenants",v:active.length,c:"#3b6fa0"}].map(x=>(
                   <div key={x.l}><div style={{ fontSize:"0.62rem",color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.05em" }}>{x.l}</div><div style={{ fontSize:"0.95rem",fontWeight:700,color:x.c,fontFamily:"'DM Mono',monospace" }}>{x.v}</div></div>
                 ))}
               </div>
@@ -808,7 +825,7 @@ function Tenants({ tenants, properties, viewingAs, onAdd, onUpdate, onDelete }) 
     if (filterStatus!=="all"&&leaseStatus(t.leaseStart,t.leaseEnd)!==filterStatus) return false;
     return true;
   });
-  const totalMonthly = filtered.filter(t=>leaseStatus(t.leaseStart,t.leaseEnd)==="active").reduce((s,t)=>s+Number(t.monthlyRent||0),0);
+  const totalLeaseIncome = filtered.filter(t=>leaseStatus(t.leaseStart,t.leaseEnd)==="active").reduce((s,t)=>s+leaseTotalRent(t),0);
 
   return (
     <div>
@@ -830,27 +847,43 @@ function Tenants({ tenants, properties, viewingAs, onAdd, onUpdate, onDelete }) 
       </div>
       <div style={{ background:"#0d1117",border:"1px solid #1e2430",borderRadius:"10px",padding:"0.75rem 1.25rem",marginBottom:"1.25rem",display:"flex",justifyContent:"space-between",alignItems:"center" }}>
         <span style={{ fontSize:"0.75rem",color:"#6b7280",fontWeight:600,textTransform:"uppercase",letterSpacing:"0.06em" }}>{filtered.length} shown</span>
-        <span style={{ fontFamily:"'DM Mono',monospace",fontSize:"0.9rem",fontWeight:700,color:"#4a7c59" }}>{fmt(totalMonthly)}/mo active rent</span>
+        <span style={{ fontFamily:"'DM Mono',monospace",fontSize:"0.9rem",fontWeight:700,color:"#4a7c59" }}>{fmt(totalLeaseIncome)} lease income</span>
       </div>
       {filtered.length===0 && <div style={{ color:"#4b5563",fontSize:"0.9rem",padding:"2rem 0",textAlign:"center" }}>No tenants match this filter.</div>}
       <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:"1rem" }}>
         {filtered.map(t=>{
           const prop = properties.find(p=>p.id===t.propertyId);
           const status = leaseStatus(t.leaseStart,t.leaseEnd);
-          const dl = t.leaseEnd?Math.ceil((new Date(t.leaseEnd)-new Date())/86400000):null;
+          const seasonal = isSeasonal(t);
+          const months = leaseMonths(t.leaseStart, t.leaseEnd);
+          const totalRent = leaseTotalRent(t);
           return (
             <div key={t.id} onClick={()=>!readOnly&&openEdit(t)} style={{ background:"#14181f",border:"1px solid #1e2430",borderRadius:"12px",padding:"1.25rem",cursor:readOnly?"default":"pointer",borderLeft:`3px solid ${prop?.color||"#374151"}` }}>
               <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"0.75rem" }}>
-                <div><div style={{ fontWeight:700,fontSize:"0.95rem",color:"#e8eaf0" }}>{t.name}</div><div style={{ fontSize:"0.75rem",color:"#6b7280",marginTop:"2px" }}>{prop?.name}{t.unit?` · Unit ${t.unit}`:""}</div></div>
+                <div>
+                  <div style={{ fontWeight:700,fontSize:"0.95rem",color:"#e8eaf0",display:"flex",alignItems:"center",gap:"0.4rem" }}>
+                    {t.name}
+                    {seasonal && <span style={{ fontSize:"0.6rem",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.06em",color:"#0891b2",background:"#0891b222",border:"1px solid #0891b244",borderRadius:"99px",padding:"1px 6px" }}>Seasonal</span>}
+                  </div>
+                  <div style={{ fontSize:"0.75rem",color:"#6b7280",marginTop:"2px" }}>{prop?.name}{t.unit?` · Unit ${t.unit}`:""}</div>
+                </div>
                 <Badge color={leaseColor(status)} label={leaseLabel(status)}/>
               </div>
               <div style={{ display:"flex",flexDirection:"column",gap:"3px",marginBottom:"0.85rem" }}>
                 {t.phone&&<div style={{ display:"flex",alignItems:"center",gap:"5px",fontSize:"0.78rem",color:"#94a3b8" }}><Icon name="phone" size={11}/>{t.phone}</div>}
                 {t.email&&<div style={{ display:"flex",alignItems:"center",gap:"5px",fontSize:"0.78rem",color:"#94a3b8" }}><Icon name="mail" size={11}/>{t.email}</div>}
+                {t.leaseStart&&t.leaseEnd&&<div style={{ display:"flex",alignItems:"center",gap:"5px",fontSize:"0.72rem",color:"#6b7280" }}><Icon name="calendar" size={10}/>{t.leaseStart} → {t.leaseEnd} · {months} mo</div>}
               </div>
               <div style={{ display:"flex",justifyContent:"space-between",paddingTop:"0.75rem",borderTop:"1px solid #1a1f2b" }}>
-                <div><div style={{ fontSize:"0.65rem",color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.05em" }}>Monthly Rent</div><div style={{ fontSize:"1rem",fontWeight:700,color:"#4a7c59",fontFamily:"'DM Mono',monospace" }}>{fmt(t.monthlyRent)}</div></div>
-                <div style={{ textAlign:"right" }}><div style={{ fontSize:"0.65rem",color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.05em" }}>Deposit</div><div style={{ fontSize:"1rem",fontWeight:700,color:"#e8eaf0",fontFamily:"'DM Mono',monospace" }}>{fmt(t.securityDeposit)}</div></div>
+                <div>
+                  <div style={{ fontSize:"0.65rem",color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.05em" }}>{seasonal?`Lease Total (${months} mo)`:"Monthly Rent"}</div>
+                  <div style={{ fontSize:"1rem",fontWeight:700,color:"#4a7c59",fontFamily:"'DM Mono',monospace" }}>{seasonal?fmt(totalRent):fmt(t.monthlyRent)}</div>
+                  {seasonal&&<div style={{ fontSize:"0.65rem",color:"#6b7280",marginTop:"1px" }}>{fmt(t.monthlyRent)}/mo</div>}
+                </div>
+                <div style={{ textAlign:"right" }}>
+                  <div style={{ fontSize:"0.65rem",color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.05em" }}>Deposit</div>
+                  <div style={{ fontSize:"1rem",fontWeight:700,color:"#e8eaf0",fontFamily:"'DM Mono',monospace" }}>{fmt(t.securityDeposit)}</div>
+                </div>
               </div>
             </div>
           );
