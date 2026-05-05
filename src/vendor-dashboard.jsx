@@ -16,6 +16,23 @@ const supabase = createClient(
   import.meta.env.VITE_SUPABASE_ANON_KEY
 );
 
+// ─── Supabase Storage helpers ─────────────────────────────────────────────────
+const BUCKET = "proptrack-files";
+
+async function uploadFile(file, folder) {
+  const ext = file.name.split(".").pop();
+  const path = `${folder}/${Math.random().toString(36).slice(2,9)}.${ext}`;
+  const { error } = await supabase.storage.from(BUCKET).upload(path, file, { upsert: false });
+  if (error) throw error;
+  const { data } = supabase.storage.from(BUCKET).getPublicUrl(path);
+  return { path, url: data.publicUrl, name: file.name };
+}
+
+async function deleteFile(path) {
+  if (!path) return;
+  await supabase.storage.from(BUCKET).remove([path]);
+}
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 const CATEGORIES = ["Lawn Care","Pool Service","House Cleaning","HVAC","Plumbing","Electrical","Pest Control","Roofing","Landscaping","General Repair","Insurance","HOA","Interest","Other"];
 const US_STATES = ["AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY"];
@@ -48,7 +65,8 @@ function rowToVendor(r) {
   return { id:r.id, name:r.name, category:r.category, phone:r.phone||"", email:r.email||"", notes:r.notes||"", createdBy:r.created_by };
 }
 function rowToInvoice(r) {
-  return { id:r.id, ownerId:r.owner_id, propertyId:r.property_id||"", vendorId:r.vendor_id||"", projectId:r.project_id||"", category:r.category||CATEGORIES[0], amount:r.amount||"", date:r.date||"", description:r.description||"", fileName:r.file_name||null, invoiceNumber:r.invoice_number||null, ownerEmail:r.owner_email, ownerName:r.owner_name };
+  return { id:r.id, ownerId:r.owner_id, propertyId:r.property_id||"", vendorId:r.vendor_id||"", projectId:r.project_id||"", category:r.category||CATEGORIES[0], amount:r.amount||"", date:r.date||"", description:r.description||"", fileName:r.file_name||null, fileUrl:r.file_url||null, filePath:r.file_path||null, invoiceNumber:r.invoice_number||null, ownerEmail:r.owner_email, ownerName:r.owner_name };
+};
 }
 function rowToProject(r) {
   return { id:r.id, ownerId:r.owner_id, propertyId:r.property_id||"", name:r.name, description:r.description||"", status:r.status||"Planning", startDate:r.start_date||"", endDate:r.end_date||"", vendorIds:r.vendor_ids||[], tasks:r.tasks||[], ownerEmail:r.owner_email, ownerName:r.owner_name };
@@ -415,7 +433,18 @@ function InvoiceDropZone({ vendors, properties, projects, onConfirm }) {
 
               <div style={{ display:"flex",gap:"0.75rem",justifyContent:"flex-end",marginTop:"0.5rem" }}>
                 <BtnSecondary onClick={dismiss}>Discard</BtnSecondary>
-                <BtnPrimary onClick={()=>{ onConfirm(form); dismiss(); }}><Icon name="check" size={13}/>Save Invoice</BtnPrimary>
+                <BtnPrimary onClick={async()=>{
+                  let finalForm = {...form};
+                  if (file) {
+                    try {
+                      const uploaded = await uploadFile(file, "invoices");
+                      finalForm.fileName = uploaded.name;
+                      finalForm.fileUrl = uploaded.url;
+                      finalForm.filePath = uploaded.path;
+                    } catch(e) { console.error("Upload failed", e); }
+                  }
+                  onConfirm(finalForm); dismiss();
+                }}><Icon name="check" size={13}/>Save Invoice</BtnPrimary>
               </div>
             </div>
           </div>
@@ -829,6 +858,7 @@ function Invoices({ invoices, properties, vendors, projects, viewingAs, isAdmin,
                 <div style={{ display:"flex",alignItems:"center",gap:"0.5rem",marginBottom:"0.2rem" }}>
                   <span style={{ fontSize:"0.88rem",fontWeight:600,color:"#e8eaf0" }}>{vend?.name||"Unknown Vendor"}</span>
                   <span style={{ fontSize:"0.68rem",background:"#1e2430",color:"#6b7280",borderRadius:"4px",padding:"1px 6px" }}>{inv.category}</span>
+                  {inv.fileUrl && <a href={inv.fileUrl} target="_blank" rel="noopener noreferrer" onClick={e=>e.stopPropagation()} style={{ fontSize:"0.68rem",color:"#3b6fa0",display:"flex",alignItems:"center",gap:"2px",textDecoration:"none" }}><Icon name="file" size={10}/>View</a>}
                   {isAdmin&&inv.ownerName&&<OwnerTag email={inv.ownerEmail} name={inv.ownerName}/>}
                 </div>
                 <div style={{ fontSize:"0.75rem",color:"#6b7280" }}>{prop?.name} · {inv.date}{inv.description?" · "+inv.description:""}</div>
@@ -1110,9 +1140,19 @@ function TaskCard({ task, vendors, readOnly, onUpdate, onDelete, onLightbox }) {
     onUpdate({...task,status:cycle[task.status||"todo"]});
   }
 
-  function handlePhotos(e) {
+  async function handlePhotos(e) {
     const files = Array.from(e.target.files);
-    Promise.all(files.map(f=>new Promise(res=>{ const r=new FileReader(); r.onload=()=>res({id:uid(),name:f.name,dataUrl:r.result}); r.readAsDataURL(f); }))).then(photos=>onUpdate({...task,photos:[...(task.photos||[]),...photos]}));
+    const uploaded = await Promise.all(files.map(async f => {
+      try {
+        const result = await uploadFile(f, "task-photos");
+        return { id:Math.random().toString(36).slice(2,9), name:result.name, url:result.url, path:result.path };
+      } catch(err) {
+        console.error("Photo upload failed", err);
+        return null;
+      }
+    }));
+    const valid = uploaded.filter(Boolean);
+    onUpdate({...task, photos:[...(task.photos||[]),...valid]});
   }
 
   return (
@@ -1144,8 +1184,8 @@ function TaskCard({ task, vendors, readOnly, onUpdate, onDelete, onLightbox }) {
           <div style={{ display:"flex",flexWrap:"wrap",gap:"0.5rem",marginBottom:"0.75rem" }}>
             {(task.photos||[]).map(photo=>(
               <div key={photo.id} style={{ position:"relative",width:"72px",height:"72px",borderRadius:"8px",overflow:"hidden",border:"1px solid #2a2f3d",flexShrink:0 }}>
-                <img src={photo.dataUrl} alt={photo.name} style={{ width:"100%",height:"100%",objectFit:"cover",cursor:"zoom-in" }} onClick={()=>onLightbox(photo.dataUrl)}/>
-                {!readOnly&&<button onClick={()=>onUpdate({...task,photos:(task.photos||[]).filter(p=>p.id!==photo.id)})} style={{ position:"absolute",top:"2px",right:"2px",background:"rgba(0,0,0,0.7)",border:"none",borderRadius:"50%",width:"18px",height:"18px",color:"#f87171",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",padding:0 }}><Icon name="x" size={10}/></button>}
+                <img src={photo.url||photo.dataUrl} alt={photo.name} style={{ width:"100%",height:"100%",objectFit:"cover",cursor:"zoom-in" }} onClick={()=>onLightbox(photo.url||photo.dataUrl)}/>
+                {!readOnly&&<button onClick={async()=>{ await deleteFile(photo.path); onUpdate({...task,photos:(task.photos||[]).filter(p=>p.id!==photo.id)}); }} style={{ position:"absolute",top:"2px",right:"2px",background:"rgba(0,0,0,0.7)",border:"none",borderRadius:"50%",width:"18px",height:"18px",color:"#f87171",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",padding:0 }}><Icon name="x" size={10}/></button>}
               </div>
             ))}
             {!readOnly&&<label style={{ width:"72px",height:"72px",borderRadius:"8px",border:"1px dashed #2a2f3d",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",cursor:"pointer",color:"#4b5563",gap:"4px",flexShrink:0 }}>
@@ -1275,7 +1315,7 @@ export default function App() {
   }
 
   async function addInvoice(form) {
-    const { data } = await supabase.from("invoices").insert({ owner_id:session.user.id,property_id:form.propertyId||null,vendor_id:form.vendorId||null,project_id:form.projectId||null,category:form.category,amount:form.amount||null,date:form.date||null,description:form.description,file_name:form.fileName,invoice_number:form.invoiceNumber||null }).select().single();
+    const { data } = await supabase.from("invoices").insert({ owner_id:session.user.id,property_id:form.propertyId||null,vendor_id:form.vendorId||null,project_id:form.projectId||null,category:form.category,amount:form.amount||null,date:form.date||null,description:form.description,file_name:form.fileName,file_url:form.fileUrl||null,file_path:form.filePath||null,invoice_number:form.invoiceNumber||null }).select().single();
     if (data) setInvoices(i=>[...i,rowToInvoice(data)]);
   }
   async function updateInvoice(form) {
