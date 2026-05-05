@@ -1,0 +1,1375 @@
+// PropTrack — Multi-user edition with Supabase auth + RLS
+// ─────────────────────────────────────────────────────────
+// ENV VARS needed (Vercel → Settings → Environment Variables):
+//   VITE_SUPABASE_URL      = https://xxxx.supabase.co
+//   VITE_SUPABASE_ANON_KEY = eyJ...
+//
+// Install: npm install @supabase/supabase-js
+// ─────────────────────────────────────────────────────────
+
+import { useState, useEffect, useRef, useCallback } from "react";
+import { createClient } from "@supabase/supabase-js";
+
+// ─── Supabase client ──────────────────────────────────────────────────────────
+const supabase = createClient(
+  import.meta.env.VITE_SUPABASE_URL,
+  import.meta.env.VITE_SUPABASE_ANON_KEY
+);
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+const CATEGORIES = ["Lawn Care","Pool Service","House Cleaning","HVAC","Plumbing","Electrical","Pest Control","Roofing","Landscaping","General Repair","Insurance","HOA","Interest","Other"];
+const US_STATES = ["AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY"];
+const PROPERTY_COLORS = ["#e07b39","#4a7c59","#3b6fa0","#8b5cf6","#d946a8","#e11d48","#0891b2","#b45309"];
+const PROJECT_STATUSES = ["Planning","In Progress","On Hold","Complete"];
+const PROJECT_STATUS_COLORS = { Planning:"#3b6fa0","In Progress":"#b45309","On Hold":"#6b7280",Complete:"#4a7c59" };
+const TASK_TYPES = ["Demo / Removal","Framing","Plumbing","Electrical","Drywall","Flooring","Painting","Cabinetry","Fixtures","Roofing","Landscaping","Inspection","Other"];
+
+// ─── Utilities ────────────────────────────────────────────────────────────────
+const fmt = n => new Intl.NumberFormat("en-US",{style:"currency",currency:"USD",maximumFractionDigits:0}).format(n||0);
+const uid = () => Math.random().toString(36).slice(2,9);
+function leaseStatus(start, end) {
+  if (!start||!end) return "unknown";
+  const now = new Date(); const e = new Date(end);
+  const d = Math.ceil((e-now)/86400000);
+  if (d<0) return "expired"; if (d<=60) return "expiring"; return "active";
+}
+function leaseLabel(s) { return {active:"Active",expiring:"Expiring Soon",expired:"Expired",unknown:"No Dates"}[s]; }
+function leaseColor(s) { return {active:"#4a7c59",expiring:"#b45309",expired:"#9b1c1c",unknown:"#374151"}[s]; }
+
+// ─── Supabase data helpers ────────────────────────────────────────────────────
+// Translates snake_case DB rows → camelCase app objects
+function rowToProperty(r) {
+  return { id:r.id, ownerId:r.owner_id, name:r.name, address:r.address||"", city:r.city||"", state:r.state||"FL", color:r.color||"#e07b39", ownerEmail:r.owner_email, ownerName:r.owner_name };
+}
+function rowToTenant(r) {
+  return { id:r.id, ownerId:r.owner_id, propertyId:r.property_id, name:r.name, email:r.email||"", phone:r.phone||"", unit:r.unit||"", leaseStart:r.lease_start||"", leaseEnd:r.lease_end||"", monthlyRent:r.monthly_rent||"", securityDeposit:r.security_deposit||"", notes:r.notes||"", contractFileName:r.contract_file_name||null };
+}
+function rowToVendor(r) {
+  return { id:r.id, name:r.name, category:r.category, phone:r.phone||"", email:r.email||"", notes:r.notes||"", createdBy:r.created_by };
+}
+function rowToInvoice(r) {
+  return { id:r.id, ownerId:r.owner_id, propertyId:r.property_id||"", vendorId:r.vendor_id||"", projectId:r.project_id||"", category:r.category||CATEGORIES[0], amount:r.amount||"", date:r.date||"", description:r.description||"", fileName:r.file_name||null, invoiceNumber:r.invoice_number||null, ownerEmail:r.owner_email, ownerName:r.owner_name };
+}
+function rowToProject(r) {
+  return { id:r.id, ownerId:r.owner_id, propertyId:r.property_id||"", name:r.name, description:r.description||"", status:r.status||"Planning", startDate:r.start_date||"", endDate:r.end_date||"", vendorIds:r.vendor_ids||[], tasks:r.tasks||[], ownerEmail:r.owner_email, ownerName:r.owner_name };
+}
+
+// ─── Icons ────────────────────────────────────────────────────────────────────
+const Icon = ({ name, size=16 }) => {
+  const icons = {
+    home: <path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/>,
+    users: <><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></>,
+    tenant: <><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></>,
+    receipt: <><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></>,
+    chart: <><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></>,
+    plus: <><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></>,
+    trash: <><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></>,
+    upload: <><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0018 9h-1.26A8 8 0 103 16.3"/></>,
+    x: <><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></>,
+    file: <><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></>,
+    phone: <path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.5 19.5 0 013.07 9.81a19.79 19.79 0 01-3.07-8.67A2 2 0 012 .18h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L6.09 7.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/>,
+    mail: <><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></>,
+    calendar: <><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></>,
+    wrench: <><path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z"/></>,
+    image: <><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></>,
+    check: <polyline points="20 6 9 17 4 12"/>,
+    chevronRight: <polyline points="9 18 15 12 9 6"/>,
+    arrowLeft: <><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></>,
+    shield: <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>,
+    logout: <><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></>,
+    eye: <><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></>,
+    dollar: <><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></>,
+    clipboard: <><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></>,
+  };
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      {icons[name]}
+    </svg>
+  );
+};
+
+// ─── Shared UI ────────────────────────────────────────────────────────────────
+function Modal({ title, onClose, children, wide }) {
+  return (
+    <div style={{ position:"fixed",inset:0,background:"rgba(10,12,18,0.82)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:"1rem" }}>
+      <div style={{ background:"#14181f",border:"1px solid #2a2f3d",borderRadius:"14px",width:"100%",maxWidth:wide?"660px":"520px",maxHeight:"92vh",overflowY:"auto",boxShadow:"0 24px 64px rgba(0,0,0,0.55)" }}>
+        <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",padding:"1.25rem 1.5rem",borderBottom:"1px solid #1e2430",position:"sticky",top:0,background:"#14181f",zIndex:10 }}>
+          <h3 style={{ margin:0,fontSize:"1rem",fontWeight:600,color:"#e8eaf0" }}>{title}</h3>
+          <button onClick={onClose} style={{ background:"none",border:"none",color:"#6b7280",cursor:"pointer",padding:"4px",display:"flex" }}><Icon name="x" size={18}/></button>
+        </div>
+        <div style={{ padding:"1.5rem" }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+const inputStyle = { width:"100%",background:"#0d1117",border:"1px solid #2a2f3d",borderRadius:"8px",color:"#e8eaf0",padding:"0.55rem 0.75rem",fontSize:"0.875rem",outline:"none",boxSizing:"border-box",fontFamily:"inherit" };
+const labelStyle = { display:"block",marginBottom:"0.35rem",fontSize:"0.75rem",fontWeight:600,color:"#8b93a7",textTransform:"uppercase",letterSpacing:"0.05em" };
+function Field({ label, children }) { return <div style={{ marginBottom:"1rem" }}><label style={labelStyle}>{label}</label>{children}</div>; }
+function Grid2({ children }) { return <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0.75rem" }}>{children}</div>; }
+function SectionDivider({ label }) {
+  return <div style={{ fontSize:"0.7rem",fontWeight:700,color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:"0.75rem",paddingBottom:"0.5rem",borderBottom:"1px solid #1e2430",marginTop:"1rem" }}>{label}</div>;
+}
+function Badge({ color, label }) {
+  return <span style={{ fontSize:"0.68rem",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.07em",color,background:color+"22",border:`1px solid ${color}44`,borderRadius:"99px",padding:"2px 8px",whiteSpace:"nowrap" }}>{label}</span>;
+}
+function BtnPrimary({ onClick, children, disabled }) {
+  return <button onClick={onClick} disabled={disabled} style={{ display:"flex",alignItems:"center",gap:"6px",background:disabled?"#4b3020":"#e07b39",color:disabled?"#6b7280":"#fff",border:"none",borderRadius:"8px",padding:"0.5rem 1rem",cursor:disabled?"not-allowed":"pointer",fontSize:"0.85rem",fontWeight:600 }}>{children}</button>;
+}
+function BtnDanger({ onClick, children }) {
+  return <button onClick={onClick} style={{ background:"#3d1515",color:"#f87171",border:"1px solid #5c1f1f",borderRadius:"8px",padding:"0.5rem 1rem",cursor:"pointer",fontSize:"0.85rem",display:"flex",alignItems:"center",gap:"6px" }}>{children}</button>;
+}
+function BtnSecondary({ onClick, children }) {
+  return <button onClick={onClick} style={{ display:"flex",alignItems:"center",gap:"6px",background:"#1e2430",color:"#94a3b8",border:"1px solid #2a2f3d",borderRadius:"8px",padding:"0.5rem 1rem",cursor:"pointer",fontSize:"0.85rem",fontWeight:500 }}>{children}</button>;
+}
+function OwnerTag({ email, name }) {
+  if (!email) return null;
+  return (
+    <span style={{ fontSize:"0.65rem",background:"#1a1f2b",color:"#6b7280",border:"1px solid #2a2f3d",borderRadius:"4px",padding:"1px 6px",display:"inline-flex",alignItems:"center",gap:"3px" }}>
+      <Icon name="eye" size={9}/>{name||email}
+    </span>
+  );
+}
+function Spinner() {
+  return <span style={{ display:"inline-block",width:"14px",height:"14px",border:"2px solid #e07b39",borderTopColor:"transparent",borderRadius:"50%",animation:"spin 0.7s linear infinite" }}/>;
+}
+
+// ─── Login / Auth Screen ──────────────────────────────────────────────────────
+function AuthScreen({ onAuth }) {
+  const [mode, setMode] = useState("login"); // "login" | "signup"
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [name, setName] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [msg, setMsg] = useState(null);
+
+  async function handleSubmit() {
+    setError(null); setMsg(null); setLoading(true);
+    try {
+      if (mode === "login") {
+        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+        onAuth(data.session);
+      } else {
+        const { error } = await supabase.auth.signUp({ email, password, options:{ data:{ full_name:name } } });
+        if (error) throw error;
+        setMsg("Check your email to confirm your account, then log in.");
+        setMode("login");
+      }
+    } catch(e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div style={{ background:"#0a0c12",minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'DM Sans',sans-serif",padding:"1rem" }}>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500;600&display=swap');*{box-sizing:border-box;}body{margin:0;}input:focus{outline:none;border-color:#e07b39!important;}@keyframes spin{to{transform:rotate(360deg);}}`}</style>
+      <div style={{ width:"100%",maxWidth:"400px" }}>
+        {/* Logo */}
+        <div style={{ display:"flex",alignItems:"center",gap:"0.75rem",marginBottom:"2rem",justifyContent:"center" }}>
+          <div style={{ width:"36px",height:"36px",background:"#e07b39",borderRadius:"10px",display:"flex",alignItems:"center",justifyContent:"center" }}>
+            <Icon name="home" size={18}/>
+          </div>
+          <span style={{ fontWeight:700,fontSize:"1.2rem",color:"#e8eaf0" }}>PropTrack</span>
+        </div>
+
+        <div style={{ background:"#14181f",border:"1px solid #1e2430",borderRadius:"16px",padding:"2rem",boxShadow:"0 24px 48px rgba(0,0,0,0.4)" }}>
+          <h2 style={{ margin:"0 0 1.5rem",fontSize:"1.1rem",fontWeight:700,color:"#e8eaf0",textAlign:"center" }}>
+            {mode==="login"?"Welcome back":"Create account"}
+          </h2>
+
+          {error && <div style={{ background:"#1c0808",border:"1px solid #5c1f1f",borderRadius:"8px",padding:"0.75rem 1rem",marginBottom:"1rem",fontSize:"0.82rem",color:"#f87171" }}>{error}</div>}
+          {msg && <div style={{ background:"#0c1c10",border:"1px solid #1e4a2a",borderRadius:"8px",padding:"0.75rem 1rem",marginBottom:"1rem",fontSize:"0.82rem",color:"#4ade80" }}>{msg}</div>}
+
+          {mode==="signup" && (
+            <Field label="Full Name">
+              <input style={inputStyle} value={name} onChange={e=>setName(e.target.value)} placeholder="Jane Smith"/>
+            </Field>
+          )}
+          <Field label="Email">
+            <input style={inputStyle} type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@email.com" onKeyDown={e=>e.key==="Enter"&&handleSubmit()}/>
+          </Field>
+          <Field label="Password">
+            <input style={inputStyle} type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="••••••••" onKeyDown={e=>e.key==="Enter"&&handleSubmit()}/>
+          </Field>
+
+          <button onClick={handleSubmit} disabled={loading} style={{ width:"100%",background:"#e07b39",color:"#fff",border:"none",borderRadius:"10px",padding:"0.7rem",cursor:loading?"not-allowed":"pointer",fontSize:"0.9rem",fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",gap:"0.5rem",marginTop:"0.5rem" }}>
+            {loading && <Spinner/>}
+            {mode==="login"?"Sign In":"Create Account"}
+          </button>
+
+          <div style={{ textAlign:"center",marginTop:"1.25rem",fontSize:"0.82rem",color:"#6b7280" }}>
+            {mode==="login" ? (
+              <>No account? <button onClick={()=>{setMode("signup");setError(null);}} style={{ background:"none",border:"none",color:"#e07b39",cursor:"pointer",fontWeight:600,fontSize:"0.82rem" }}>Sign up</button></>
+            ) : (
+              <>Already have one? <button onClick={()=>{setMode("login");setError(null);}} style={{ background:"none",border:"none",color:"#e07b39",cursor:"pointer",fontWeight:600,fontSize:"0.82rem" }}>Sign in</button></>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Admin: User Switcher Banner ──────────────────────────────────────────────
+// Lets admin impersonate / view as another user
+function AdminBanner({ profiles, viewingAs, setViewingAs }) {
+  return (
+    <div style={{ background:"#1a0f05",borderBottom:"1px solid #78350f",padding:"0.5rem 1.5rem",display:"flex",alignItems:"center",gap:"1rem",flexWrap:"wrap" }}>
+      <div style={{ display:"flex",alignItems:"center",gap:"0.4rem",fontSize:"0.75rem",color:"#fbbf24",fontWeight:700 }}>
+        <Icon name="shield" size={13}/>ADMIN VIEW
+      </div>
+      <div style={{ display:"flex",gap:"0.4rem",flexWrap:"wrap" }}>
+        <button onClick={()=>setViewingAs(null)} style={{ fontSize:"0.72rem",padding:"3px 10px",borderRadius:"6px",border:`1px solid ${!viewingAs?"#e07b39":"#2a2f3d"}`,background:!viewingAs?"#e07b3922":"#1e2430",color:!viewingAs?"#e07b39":"#6b7280",cursor:"pointer",fontWeight:!viewingAs?700:400 }}>
+          My Data
+        </button>
+        {profiles.filter(p=>p.role!=="admin").map(p=>(
+          <button key={p.id} onClick={()=>setViewingAs(p)} style={{ fontSize:"0.72rem",padding:"3px 10px",borderRadius:"6px",border:`1px solid ${viewingAs?.id===p.id?"#3b6fa0":"#2a2f3d"}`,background:viewingAs?.id===p.id?"#3b6fa022":"#1e2430",color:viewingAs?.id===p.id?"#3b6fa0":"#6b7280",cursor:"pointer",fontWeight:viewingAs?.id===p.id?700:400 }}>
+            <Icon name="eye" size={10}/> {p.full_name||p.email}
+          </button>
+        ))}
+      </div>
+      {viewingAs && (
+        <span style={{ fontSize:"0.72rem",color:"#b45309",marginLeft:"auto" }}>
+          Viewing as <strong>{viewingAs.full_name||viewingAs.email}</strong> — read-only outside their projects
+        </span>
+      )}
+    </div>
+  );
+}
+
+// ─── Admin: Members Tab ───────────────────────────────────────────────────────
+function MembersTab({ profiles, currentUser, onRoleChange }) {
+  const [saving, setSaving] = useState(null);
+
+  async function toggleRole(profile) {
+    const newRole = profile.role === "admin" ? "member" : "admin";
+    if (profile.id === currentUser.id) return; // can't demote self
+    setSaving(profile.id);
+    const { error } = await supabase.from("profiles").update({ role:newRole }).eq("id", profile.id);
+    if (!error) onRoleChange(profile.id, newRole);
+    setSaving(null);
+  }
+
+  return (
+    <div>
+      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1.5rem" }}>
+        <h2 style={{ margin:0,fontSize:"1.1rem",fontWeight:700,color:"#e8eaf0" }}>Members</h2>
+        <span style={{ fontSize:"0.75rem",color:"#6b7280" }}>Invite users by sharing the app URL — they sign up themselves.</span>
+      </div>
+
+      <div style={{ background:"#14181f",border:"1px solid #1e2430",borderRadius:"12px",overflow:"hidden" }}>
+        {profiles.map((p,i)=>(
+          <div key={p.id} style={{ display:"flex",alignItems:"center",justifyContent:"space-between",padding:"1rem 1.25rem",borderBottom:i<profiles.length-1?"1px solid #1a1f2b":"none" }}>
+            <div>
+              <div style={{ fontSize:"0.9rem",fontWeight:600,color:"#e8eaf0",display:"flex",alignItems:"center",gap:"0.5rem" }}>
+                {p.full_name||"—"}
+                {p.id===currentUser.id && <span style={{ fontSize:"0.65rem",color:"#6b7280" }}>(you)</span>}
+              </div>
+              <div style={{ fontSize:"0.75rem",color:"#6b7280" }}>{p.email}</div>
+            </div>
+            <div style={{ display:"flex",alignItems:"center",gap:"0.75rem" }}>
+              <Badge color={p.role==="admin"?"#e07b39":"#3b6fa0"} label={p.role}/>
+              {p.id!==currentUser.id && (
+                <button onClick={()=>toggleRole(p)} disabled={!!saving} style={{ fontSize:"0.72rem",padding:"3px 10px",borderRadius:"6px",border:"1px solid #2a2f3d",background:"#1e2430",color:"#6b7280",cursor:"pointer" }}>
+                  {saving===p.id ? <Spinner/> : p.role==="admin"?"Make member":"Make admin"}
+                </button>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ marginTop:"1.5rem",background:"#0d1117",border:"1px solid #1e2430",borderRadius:"10px",padding:"1rem 1.25rem",fontSize:"0.8rem",color:"#6b7280",lineHeight:1.6 }}>
+        <strong style={{ color:"#94a3b8" }}>Permission summary</strong><br/>
+        <strong style={{ color:"#e8eaf0" }}>Members</strong> — see & edit their own properties, tenants, invoices, projects. Can add vendors but not delete them.<br/>
+        <strong style={{ color:"#e07b39" }}>Admin</strong> — sees and edits all data, can delete vendors, can promote/demote members.
+      </div>
+    </div>
+  );
+}
+
+// ─── AI Invoice Parser ────────────────────────────────────────────────────────
+function fileToBase64(file) {
+  return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result.split(",")[1]); r.onerror=()=>rej(new Error("Read failed")); r.readAsDataURL(file); });
+}
+
+async function parseInvoiceWithAI(file, vendors, properties, projects) {
+  const isImage = file.type.startsWith("image/");
+  const isPdf = file.type==="application/pdf";
+  if (!isImage&&!isPdf) throw new Error("Only images and PDFs are supported.");
+  const b64 = await fileToBase64(file);
+  const vendorList = vendors.map(v=>`${v.id}: ${v.name} (${v.category})`).join("\n");
+  const propList = properties.map(p=>`${p.id}: ${p.name}`).join("\n");
+  const projList = projects.map(p=>`${p.id}: ${p.name}`).join("\n");
+
+  const prompt = `You are an invoice data extractor for a property management app. Return ONLY valid JSON, no markdown.
+
+Known vendors: ${vendorList||"none"}
+Known properties: ${propList||"none"}
+Known projects: ${projList||"none"}
+Valid categories: ${CATEGORIES.join(", ")}
+
+Return this exact JSON:
+{"vendorId":null,"vendorNameRaw":"","propertyId":null,"projectId":null,"amount":0,"date":"YYYY-MM-DD","category":"Other","description":"","invoiceNumber":null,"confidence":"medium"}`;
+
+  const body = { model:"claude-sonnet-4-20250514", max_tokens:800, messages:[{ role:"user", content:[{ type:isPdf?"document":"image", source:{ type:"base64", media_type:file.type, data:b64 } },{ type:"text", text:prompt }] }] };
+  const resp = await fetch("https://api.anthropic.com/v1/messages",{ method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body) });
+  if (!resp.ok) throw new Error(`API error ${resp.status}`);
+  const data = await resp.json();
+  const text = data.content?.map(c=>c.text||"").join("")||"";
+  return JSON.parse(text.replace(/```json|```/g,"").trim());
+}
+
+function InvoiceDropZone({ vendors, properties, projects, onConfirm }) {
+  const [dragging, setDragging] = useState(false);
+  const [parsing, setParsing] = useState(false);
+  const [error, setError] = useState(null);
+  const [parsed, setParsed] = useState(null);
+  const [file, setFile] = useState(null);
+  const [previewUrl, setPreviewUrl] = useState(null);
+  const [form, setForm] = useState(null);
+  const inputRef = useRef();
+  const confidenceColor = { low:"#f87171", medium:"#fbbf24", high:"#4a7c59" };
+
+  async function processFile(f) {
+    if (!f) return;
+    setFile(f); setError(null); setParsed(null); setForm(null);
+    if (f.type.startsWith("image/")) setPreviewUrl(URL.createObjectURL(f)); else setPreviewUrl(null);
+    setParsing(true);
+    try {
+      const result = await parseInvoiceWithAI(f, vendors, properties, projects);
+      setParsed(result);
+      setForm({ vendorId:result.vendorId||"", vendorNameRaw:result.vendorNameRaw||"", propertyId:result.propertyId||(properties[0]?.id||""), projectId:result.projectId||"", amount:result.amount!=null?String(result.amount):"", date:result.date||new Date().toISOString().slice(0,10), category:CATEGORIES.includes(result.category)?result.category:CATEGORIES[0], description:result.description||"", invoiceNumber:result.invoiceNumber||"", fileName:f.name });
+    } catch(e) { setError(e.message||"Failed to parse invoice."); }
+    finally { setParsing(false); }
+  }
+
+  function dismiss() { setParsed(null); setForm(null); setFile(null); setPreviewUrl(null); setError(null); }
+
+  return (
+    <>
+      <div onDrop={e=>{e.preventDefault();setDragging(false);const f=e.dataTransfer.files[0];if(f)processFile(f);}} onDragOver={e=>{e.preventDefault();setDragging(true);}} onDragLeave={()=>setDragging(false)} onClick={()=>inputRef.current?.click()}
+        style={{ border:`2px dashed ${dragging?"#e07b39":"#2a2f3d"}`,borderRadius:"12px",padding:"1.25rem",textAlign:"center",cursor:"pointer",background:dragging?"#1c1407":"#0d1117",transition:"all 0.15s",marginBottom:"1.25rem" }}>
+        <input ref={inputRef} type="file" accept=".pdf,.jpg,.jpeg,.png" style={{ display:"none" }} onChange={e=>{const f=e.target.files[0];if(f)processFile(f);e.target.value="";}}/>
+        {parsing ? (
+          <div style={{ color:"#e07b39",fontSize:"0.85rem",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.5rem" }}><Spinner/>Reading invoice with AI…</div>
+        ) : (
+          <div>
+            <div style={{ color:"#4b5563",marginBottom:"0.25rem" }}><Icon name="upload" size={18}/></div>
+            <div style={{ fontSize:"0.82rem",color:dragging?"#e07b39":"#6b7280",fontWeight:600 }}>{dragging?"Drop invoice here":"Drag & drop invoice PDF or image"}</div>
+            <div style={{ fontSize:"0.7rem",color:"#4b5563",marginTop:"0.2rem" }}>or click to browse · AI extracts vendor, amount, date, category</div>
+          </div>
+        )}
+      </div>
+      {error && <div style={{ background:"#1c0808",border:"1px solid #5c1f1f",borderRadius:"8px",padding:"0.75rem 1rem",marginBottom:"1rem",fontSize:"0.82rem",color:"#f87171",display:"flex",justifyContent:"space-between",alignItems:"center" }}>{error}<button onClick={()=>setError(null)} style={{ background:"none",border:"none",color:"#f87171",cursor:"pointer",padding:0 }}><Icon name="x" size={13}/></button></div>}
+
+      {form && (
+        <div style={{ position:"fixed",inset:0,background:"rgba(10,12,18,0.85)",zIndex:1200,display:"flex",alignItems:"center",justifyContent:"center",padding:"1rem" }}>
+          <div style={{ background:"#14181f",border:"1px solid #2a2f3d",borderRadius:"14px",width:"100%",maxWidth:"660px",maxHeight:"94vh",overflowY:"auto",boxShadow:"0 24px 64px rgba(0,0,0,0.6)" }}>
+            <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",padding:"1.25rem 1.5rem",borderBottom:"1px solid #1e2430",position:"sticky",top:0,background:"#14181f",zIndex:10 }}>
+              <div>
+                <h3 style={{ margin:0,fontSize:"1rem",fontWeight:700,color:"#e8eaf0" }}>Review Extracted Invoice</h3>
+                <div style={{ fontSize:"0.72rem",color:"#6b7280",marginTop:"2px" }}>AI confidence: <span style={{ color:confidenceColor[parsed?.confidence]||"#6b7280",fontWeight:700,textTransform:"uppercase" }}>{parsed?.confidence||"—"}</span>{parsed?.invoiceNumber&&<span style={{ marginLeft:"0.75rem",color:"#4b5563" }}>#{parsed.invoiceNumber}</span>}</div>
+              </div>
+              <button onClick={dismiss} style={{ background:"none",border:"none",color:"#6b7280",cursor:"pointer",padding:"4px",display:"flex" }}><Icon name="x" size={18}/></button>
+            </div>
+            <div style={{ padding:"1.5rem" }}>
+              {previewUrl && <div style={{ marginBottom:"1rem",borderRadius:"8px",overflow:"hidden",border:"1px solid #2a2f3d",maxHeight:"140px",display:"flex",alignItems:"center",justifyContent:"center",background:"#0d1117" }}><img src={previewUrl} alt="" style={{ maxHeight:"140px",maxWidth:"100%",objectFit:"contain" }}/></div>}
+              {!previewUrl&&file && <div style={{ marginBottom:"1rem",background:"#0d1117",border:"1px solid #2a2f3d",borderRadius:"8px",padding:"0.6rem 1rem",display:"flex",alignItems:"center",gap:"0.5rem",fontSize:"0.78rem",color:"#6b7280" }}><Icon name="file" size={13}/>{file.name}</div>}
+
+              <SectionDivider label="Vendor"/>
+              {form.vendorNameRaw && <div style={{ fontSize:"0.78rem",color:"#94a3b8",marginBottom:"0.5rem",padding:"0.4rem 0.75rem",background:"#0d1117",borderRadius:"6px",border:"1px solid #1e2430" }}>Found on invoice: <strong style={{ color:"#e8eaf0" }}>{form.vendorNameRaw}</strong></div>}
+              <Field label="Match to Existing Vendor">
+                <select style={inputStyle} value={form.vendorId} onChange={e=>setForm(f=>({...f,vendorId:e.target.value}))}>
+                  <option value="">— No match —</option>
+                  {vendors.map(v=><option key={v.id} value={v.id}>{v.name}</option>)}
+                </select>
+              </Field>
+
+              <SectionDivider label="Invoice Details"/>
+              <Grid2>
+                <Field label="Amount ($)"><input style={inputStyle} type="number" value={form.amount} onChange={e=>setForm(f=>({...f,amount:e.target.value}))} placeholder="0.00"/></Field>
+                <Field label="Date"><input style={inputStyle} type="date" value={form.date} onChange={e=>setForm(f=>({...f,date:e.target.value}))}/></Field>
+              </Grid2>
+              <Field label="Category"><select style={inputStyle} value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))}>{CATEGORIES.map(c=><option key={c}>{c}</option>)}</select></Field>
+              <Field label="Description"><input style={inputStyle} value={form.description} onChange={e=>setForm(f=>({...f,description:e.target.value}))} placeholder="Brief description"/></Field>
+
+              <SectionDivider label="Assignment"/>
+              <Grid2>
+                <Field label="Property">
+                  <select style={inputStyle} value={form.propertyId} onChange={e=>setForm(f=>({...f,propertyId:e.target.value}))}>
+                    <option value="">Select…</option>
+                    {properties.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                </Field>
+                <Field label="Project (optional)">
+                  <select style={inputStyle} value={form.projectId} onChange={e=>setForm(f=>({...f,projectId:e.target.value}))}>
+                    <option value="">— None —</option>
+                    {projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                </Field>
+              </Grid2>
+
+              <div style={{ display:"flex",gap:"0.75rem",justifyContent:"flex-end",marginTop:"0.5rem" }}>
+                <BtnSecondary onClick={dismiss}>Discard</BtnSecondary>
+                <BtnPrimary onClick={()=>{ onConfirm(form); dismiss(); }}><Icon name="check" size={13}/>Save Invoice</BtnPrimary>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+// ─── Dashboard ────────────────────────────────────────────────────────────────
+function Dashboard({ properties, invoices, vendors, tenants, projects, isAdmin, viewingAs }) {
+  const grandExpense = invoices.reduce((s,i)=>s+Number(i.amount),0);
+  const activeTenants = tenants.filter(t=>leaseStatus(t.leaseStart,t.leaseEnd)==="active");
+  const monthlyIncome = activeTenants.reduce((s,t)=>s+Number(t.monthlyRent||0),0);
+  const expiringCount = tenants.filter(t=>leaseStatus(t.leaseStart,t.leaseEnd)==="expiring").length;
+  const activeProjects = projects.filter(p=>p.status==="In Progress").length;
+
+  const propTotals = properties.map(p=>({ ...p,
+    expense: invoices.filter(i=>i.propertyId===p.id).reduce((s,i)=>s+Number(i.amount),0),
+    income: tenants.filter(t=>t.propertyId===p.id&&leaseStatus(t.leaseStart,t.leaseEnd)==="active").reduce((s,t)=>s+Number(t.monthlyRent||0),0)*12,
+  }));
+  const byCategory = CATEGORIES.map(cat=>({ cat, total:invoices.filter(i=>i.category===cat).reduce((s,i)=>s+Number(i.amount),0) })).filter(x=>x.total>0).sort((a,b)=>b.total-a.total);
+  const recent = [...invoices].sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,5);
+
+  return (
+    <div>
+      {viewingAs && (
+        <div style={{ background:"#0d1520",border:"1px solid #1e3a5f",borderRadius:"10px",padding:"0.75rem 1.25rem",marginBottom:"1.25rem",fontSize:"0.82rem",color:"#3b6fa0",display:"flex",alignItems:"center",gap:"0.5rem" }}>
+          <Icon name="eye" size={13}/>Viewing dashboard for <strong>{viewingAs.full_name||viewingAs.email}</strong>
+        </div>
+      )}
+      <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(148px,1fr))",gap:"1rem",marginBottom:"1.75rem" }}>
+        {[
+          { label:"Total Expenses", value:fmt(grandExpense), accent:"#e07b39" },
+          { label:"Annual Rent Income", value:fmt(monthlyIncome*12), accent:"#4a7c59" },
+          { label:"Active Tenants", value:activeTenants.length, accent:"#3b6fa0" },
+          { label:"Properties", value:properties.length, accent:"#8b5cf6" },
+          { label:"Active Projects", value:activeProjects, accent:"#b45309" },
+          { label:"Leases Expiring", value:expiringCount, accent:expiringCount>0?"#b45309":"#374151" },
+        ].map(k=>(
+          <div key={k.label} style={{ background:"#14181f",border:"1px solid #1e2430",borderRadius:"12px",padding:"1rem 1.15rem",borderTop:`3px solid ${k.accent}` }}>
+            <div style={{ fontSize:"0.68rem",fontWeight:700,color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:"0.4rem" }}>{k.label}</div>
+            <div style={{ fontSize:"1.5rem",fontWeight:700,color:"#e8eaf0",fontFamily:"'DM Mono',monospace" }}>{k.value}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:"1.25rem",marginBottom:"1.25rem" }}>
+        <div style={{ background:"#14181f",border:"1px solid #1e2430",borderRadius:"12px",padding:"1.25rem" }}>
+          <div style={{ fontSize:"0.72rem",fontWeight:700,color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:"1rem" }}>Income vs. Expense by Property</div>
+          {propTotals.length===0 && <div style={{ color:"#4b5563",fontSize:"0.85rem" }}>Add properties to see data.</div>}
+          {propTotals.map(p=>(
+            <div key={p.id} style={{ marginBottom:"1rem" }}>
+              <div style={{ display:"flex",justifyContent:"space-between",marginBottom:"0.35rem",alignItems:"center" }}>
+                <span style={{ fontSize:"0.83rem",color:"#cbd5e1",fontWeight:600 }}>{p.name}</span>
+                <span style={{ fontSize:"0.75rem",color:p.income-p.expense>=0?"#4a7c59":"#e07b39",fontFamily:"'DM Mono',monospace" }}>net {fmt(p.income-p.expense)}</span>
+              </div>
+              <div style={{ display:"flex",gap:"4px",height:"5px" }}>
+                <div style={{ flex:p.income||1,background:"#4a7c59",borderRadius:"99px 0 0 99px",opacity:0.8 }}/>
+                <div style={{ flex:p.expense||1,background:"#e07b39",borderRadius:"0 99px 99px 0",opacity:0.8 }}/>
+              </div>
+              <div style={{ display:"flex",justifyContent:"space-between",marginTop:"0.25rem" }}>
+                <span style={{ fontSize:"0.67rem",color:"#4a7c59" }}>↑ {fmt(p.income)} rent/yr</span>
+                <span style={{ fontSize:"0.67rem",color:"#e07b39" }}>↓ {fmt(p.expense)} exp</span>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div style={{ background:"#14181f",border:"1px solid #1e2430",borderRadius:"12px",padding:"1.25rem" }}>
+          <div style={{ fontSize:"0.72rem",fontWeight:700,color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:"1rem" }}>Expenses by Category</div>
+          {byCategory.length===0 && <div style={{ color:"#4b5563",fontSize:"0.85rem" }}>No invoices yet.</div>}
+          {byCategory.slice(0,7).map(c=>(
+            <div key={c.cat} style={{ display:"flex",justifyContent:"space-between",alignItems:"center",padding:"0.38rem 0",borderBottom:"1px solid #1a1f2b" }}>
+              <span style={{ fontSize:"0.82rem",color:"#94a3b8" }}>{c.cat}</span>
+              <span style={{ fontSize:"0.82rem",fontWeight:600,color:"#e8eaf0",fontFamily:"'DM Mono',monospace" }}>{fmt(c.total)}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {expiringCount>0 && (
+        <div style={{ background:"#1c1407",border:"1px solid #78350f",borderRadius:"10px",padding:"0.9rem 1.25rem",marginBottom:"1.25rem",display:"flex",alignItems:"center",gap:"0.75rem" }}>
+          <Icon name="calendar" size={16}/><span style={{ fontSize:"0.85rem",color:"#fbbf24" }}><strong>{expiringCount} lease{expiringCount>1?"s":""}</strong> expiring within 60 days.</span>
+        </div>
+      )}
+
+      <div style={{ background:"#14181f",border:"1px solid #1e2430",borderRadius:"12px",padding:"1.25rem" }}>
+        <div style={{ fontSize:"0.72rem",fontWeight:700,color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:"1rem" }}>Recent Invoices</div>
+        {recent.length===0 && <div style={{ color:"#4b5563",fontSize:"0.85rem" }}>No invoices yet.</div>}
+        {recent.map(inv=>{
+          const prop = properties.find(p=>p.id===inv.propertyId);
+          const vend = vendors.find(v=>v.id===inv.vendorId);
+          return (
+            <div key={inv.id} style={{ display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0.6rem 0",borderBottom:"1px solid #1a1f2b" }}>
+              <div style={{ display:"flex",alignItems:"center",gap:"0.75rem" }}>
+                <div style={{ width:"6px",height:"6px",borderRadius:"50%",background:prop?.color||"#6b7280",flexShrink:0 }}/>
+                <div>
+                  <div style={{ fontSize:"0.85rem",color:"#cbd5e1" }}>{vend?.name||"—"}</div>
+                  <div style={{ fontSize:"0.72rem",color:"#6b7280" }}>{prop?.name} · {inv.category} · {inv.date}</div>
+                </div>
+              </div>
+              <span style={{ fontFamily:"'DM Mono',monospace",fontSize:"0.9rem",fontWeight:600,color:"#e8eaf0" }}>{fmt(inv.amount)}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── Properties ───────────────────────────────────────────────────────────────
+function Properties({ properties, isAdmin, viewingAs, onAdd, onUpdate, onDelete, invoices, tenants }) {
+  const [modal, setModal] = useState(null);
+  const blank = { name:"",address:"",city:"",state:"FL",color:PROPERTY_COLORS[0] };
+  const [form, setForm] = useState(blank);
+  const readOnly = !!viewingAs;
+
+  function openAdd() { setForm(blank); setModal("add"); }
+  function openEdit(p) { setForm({...p}); setModal(p); }
+  async function handleSave() {
+    if (!form.name.trim()) return;
+    if (modal==="add") await onAdd(form);
+    else await onUpdate({ ...form, id:modal.id });
+    setModal(null);
+  }
+  async function handleDelete(id) {
+    if (!confirm("Delete this property?")) return;
+    await onDelete(id); setModal(null);
+  }
+
+  return (
+    <div>
+      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1.25rem" }}>
+        <h2 style={{ margin:0,fontSize:"1.1rem",fontWeight:700,color:"#e8eaf0" }}>Properties {viewingAs&&<OwnerTag email={viewingAs.email} name={viewingAs.full_name}/>}</h2>
+        {!readOnly && <BtnPrimary onClick={openAdd}><Icon name="plus" size={14}/>Add Property</BtnPrimary>}
+      </div>
+      {properties.length===0 && <div style={{ color:"#4b5563",fontSize:"0.9rem",padding:"2rem 0",textAlign:"center" }}>No properties yet.</div>}
+      <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:"1rem" }}>
+        {properties.map(p=>{
+          const spent = invoices.filter(i=>i.propertyId===p.id).reduce((s,i)=>s+Number(i.amount),0);
+          const active = tenants.filter(t=>t.propertyId===p.id&&leaseStatus(t.leaseStart,t.leaseEnd)==="active");
+          const monthlyRent = active.reduce((s,t)=>s+Number(t.monthlyRent||0),0);
+          return (
+            <div key={p.id} onClick={()=>!readOnly&&openEdit(p)} style={{ background:"#14181f",border:"1px solid #1e2430",borderRadius:"12px",padding:"1.25rem",borderTop:`3px solid ${p.color}`,cursor:readOnly?"default":"pointer" }}>
+              <div style={{ fontSize:"1rem",fontWeight:700,color:"#e8eaf0",marginBottom:"0.2rem" }}>{p.name}</div>
+              <div style={{ fontSize:"0.78rem",color:"#6b7280" }}>{p.city}, {p.state}</div>
+              <div style={{ fontSize:"0.74rem",color:"#4b5563" }}>{p.address}</div>
+              <div style={{ marginTop:"1rem",paddingTop:"0.75rem",borderTop:"1px solid #1a1f2b",display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:"0.5rem" }}>
+                {[{l:"Expenses",v:fmt(spent),c:"#e07b39"},{l:"Mo. Rent",v:fmt(monthlyRent),c:"#4a7c59"},{l:"Tenants",v:active.length,c:"#3b6fa0"}].map(x=>(
+                  <div key={x.l}><div style={{ fontSize:"0.62rem",color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.05em" }}>{x.l}</div><div style={{ fontSize:"0.95rem",fontWeight:700,color:x.c,fontFamily:"'DM Mono',monospace" }}>{x.v}</div></div>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {modal && !readOnly && (
+        <Modal title={modal==="add"?"Add Property":"Edit Property"} onClose={()=>setModal(null)}>
+          <Field label="Property Name"><input style={inputStyle} value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="e.g. Naples Main"/></Field>
+          <Field label="Street Address"><input style={inputStyle} value={form.address} onChange={e=>setForm(f=>({...f,address:e.target.value}))} placeholder="123 Main St"/></Field>
+          <Grid2>
+            <Field label="City"><input style={inputStyle} value={form.city} onChange={e=>setForm(f=>({...f,city:e.target.value}))} placeholder="City"/></Field>
+            <Field label="State"><select style={inputStyle} value={form.state} onChange={e=>setForm(f=>({...f,state:e.target.value}))}>{US_STATES.map(s=><option key={s}>{s}</option>)}</select></Field>
+          </Grid2>
+          <Field label="Color Tag">
+            <div style={{ display:"flex",gap:"0.5rem",flexWrap:"wrap" }}>
+              {PROPERTY_COLORS.map(c=><div key={c} onClick={()=>setForm(f=>({...f,color:c}))} style={{ width:"28px",height:"28px",borderRadius:"50%",background:c,cursor:"pointer",border:form.color===c?"3px solid #fff":"3px solid transparent" }}/>)}
+            </div>
+          </Field>
+          <div style={{ display:"flex",gap:"0.75rem",justifyContent:"flex-end" }}>
+            {modal!=="add" && <BtnDanger onClick={()=>handleDelete(modal.id)}><Icon name="trash" size={14}/>Delete</BtnDanger>}
+            <button onClick={handleSave} style={{ background:"#e07b39",color:"#fff",border:"none",borderRadius:"8px",padding:"0.5rem 1.25rem",cursor:"pointer",fontSize:"0.85rem",fontWeight:600,marginLeft:"auto" }}>Save</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ─── Tenants ──────────────────────────────────────────────────────────────────
+function Tenants({ tenants, properties, viewingAs, onAdd, onUpdate, onDelete }) {
+  const [modal, setModal] = useState(null);
+  const [filterProp, setFilterProp] = useState("all");
+  const [filterStatus, setFilterStatus] = useState("all");
+  const fileRef = useRef();
+  const readOnly = !!viewingAs;
+  const blank = { name:"",email:"",phone:"",propertyId:properties[0]?.id||"",leaseStart:"",leaseEnd:"",monthlyRent:"",securityDeposit:"",unit:"",notes:"",contractFileName:null };
+  const [form, setForm] = useState(blank);
+
+  function openAdd() { setForm({...blank,propertyId:properties[0]?.id||""}); setModal("add"); }
+  function openEdit(t) { setForm({...t}); setModal(t); }
+  async function handleSave() {
+    if (!form.name.trim()||!form.propertyId) return;
+    if (modal==="add") await onAdd(form); else await onUpdate({...form,id:modal.id});
+    setModal(null);
+  }
+  async function handleDelete(id) {
+    if (!confirm("Remove this tenant?")) return;
+    await onDelete(id); setModal(null);
+  }
+
+  const filtered = tenants.filter(t=>{
+    if (filterProp!=="all"&&t.propertyId!==filterProp) return false;
+    if (filterStatus!=="all"&&leaseStatus(t.leaseStart,t.leaseEnd)!==filterStatus) return false;
+    return true;
+  });
+  const totalMonthly = filtered.filter(t=>leaseStatus(t.leaseStart,t.leaseEnd)==="active").reduce((s,t)=>s+Number(t.monthlyRent||0),0);
+
+  return (
+    <div>
+      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1.25rem",flexWrap:"wrap",gap:"0.75rem" }}>
+        <h2 style={{ margin:0,fontSize:"1.1rem",fontWeight:700,color:"#e8eaf0" }}>Tenants {viewingAs&&<OwnerTag email={viewingAs.email} name={viewingAs.full_name}/>}</h2>
+        <div style={{ display:"flex",gap:"0.5rem",alignItems:"center",flexWrap:"wrap" }}>
+          <select style={{...inputStyle,width:"auto"}} value={filterProp} onChange={e=>setFilterProp(e.target.value)}>
+            <option value="all">All Properties</option>
+            {properties.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+          <select style={{...inputStyle,width:"auto"}} value={filterStatus} onChange={e=>setFilterStatus(e.target.value)}>
+            <option value="all">All Statuses</option>
+            <option value="active">Active</option>
+            <option value="expiring">Expiring Soon</option>
+            <option value="expired">Expired</option>
+          </select>
+          {!readOnly && <BtnPrimary onClick={openAdd}><Icon name="plus" size={14}/>Add Tenant</BtnPrimary>}
+        </div>
+      </div>
+      <div style={{ background:"#0d1117",border:"1px solid #1e2430",borderRadius:"10px",padding:"0.75rem 1.25rem",marginBottom:"1.25rem",display:"flex",justifyContent:"space-between",alignItems:"center" }}>
+        <span style={{ fontSize:"0.75rem",color:"#6b7280",fontWeight:600,textTransform:"uppercase",letterSpacing:"0.06em" }}>{filtered.length} shown</span>
+        <span style={{ fontFamily:"'DM Mono',monospace",fontSize:"0.9rem",fontWeight:700,color:"#4a7c59" }}>{fmt(totalMonthly)}/mo active rent</span>
+      </div>
+      {filtered.length===0 && <div style={{ color:"#4b5563",fontSize:"0.9rem",padding:"2rem 0",textAlign:"center" }}>No tenants match this filter.</div>}
+      <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:"1rem" }}>
+        {filtered.map(t=>{
+          const prop = properties.find(p=>p.id===t.propertyId);
+          const status = leaseStatus(t.leaseStart,t.leaseEnd);
+          const dl = t.leaseEnd?Math.ceil((new Date(t.leaseEnd)-new Date())/86400000):null;
+          return (
+            <div key={t.id} onClick={()=>!readOnly&&openEdit(t)} style={{ background:"#14181f",border:"1px solid #1e2430",borderRadius:"12px",padding:"1.25rem",cursor:readOnly?"default":"pointer",borderLeft:`3px solid ${prop?.color||"#374151"}` }}>
+              <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"0.75rem" }}>
+                <div><div style={{ fontWeight:700,fontSize:"0.95rem",color:"#e8eaf0" }}>{t.name}</div><div style={{ fontSize:"0.75rem",color:"#6b7280",marginTop:"2px" }}>{prop?.name}{t.unit?` · Unit ${t.unit}`:""}</div></div>
+                <Badge color={leaseColor(status)} label={leaseLabel(status)}/>
+              </div>
+              <div style={{ display:"flex",flexDirection:"column",gap:"3px",marginBottom:"0.85rem" }}>
+                {t.phone&&<div style={{ display:"flex",alignItems:"center",gap:"5px",fontSize:"0.78rem",color:"#94a3b8" }}><Icon name="phone" size={11}/>{t.phone}</div>}
+                {t.email&&<div style={{ display:"flex",alignItems:"center",gap:"5px",fontSize:"0.78rem",color:"#94a3b8" }}><Icon name="mail" size={11}/>{t.email}</div>}
+              </div>
+              <div style={{ display:"flex",justifyContent:"space-between",paddingTop:"0.75rem",borderTop:"1px solid #1a1f2b" }}>
+                <div><div style={{ fontSize:"0.65rem",color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.05em" }}>Monthly Rent</div><div style={{ fontSize:"1rem",fontWeight:700,color:"#4a7c59",fontFamily:"'DM Mono',monospace" }}>{fmt(t.monthlyRent)}</div></div>
+                <div style={{ textAlign:"right" }}><div style={{ fontSize:"0.65rem",color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.05em" }}>Deposit</div><div style={{ fontSize:"1rem",fontWeight:700,color:"#e8eaf0",fontFamily:"'DM Mono',monospace" }}>{fmt(t.securityDeposit)}</div></div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {modal && !readOnly && (
+        <Modal title={modal==="add"?"Add Tenant":"Edit Tenant"} onClose={()=>setModal(null)} wide>
+          <SectionDivider label="Contact Info"/>
+          <Field label="Full Name"><input style={inputStyle} value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="Jane Smith"/></Field>
+          <Grid2>
+            <Field label="Phone"><input style={inputStyle} value={form.phone} onChange={e=>setForm(f=>({...f,phone:e.target.value}))} placeholder="555-0100"/></Field>
+            <Field label="Email"><input style={inputStyle} value={form.email} onChange={e=>setForm(f=>({...f,email:e.target.value}))} placeholder="jane@email.com"/></Field>
+          </Grid2>
+          <SectionDivider label="Property & Lease"/>
+          <Grid2>
+            <Field label="Property"><select style={inputStyle} value={form.propertyId} onChange={e=>setForm(f=>({...f,propertyId:e.target.value}))}><option value="">Select…</option>{properties.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></Field>
+            <Field label="Unit (optional)"><input style={inputStyle} value={form.unit} onChange={e=>setForm(f=>({...f,unit:e.target.value}))} placeholder="Unit 2B"/></Field>
+          </Grid2>
+          <Grid2>
+            <Field label="Lease Start"><input style={inputStyle} type="date" value={form.leaseStart} onChange={e=>setForm(f=>({...f,leaseStart:e.target.value}))}/></Field>
+            <Field label="Lease End"><input style={inputStyle} type="date" value={form.leaseEnd} onChange={e=>setForm(f=>({...f,leaseEnd:e.target.value}))}/></Field>
+          </Grid2>
+          <SectionDivider label="Financials"/>
+          <Grid2>
+            <Field label="Monthly Rent ($)"><input style={inputStyle} type="number" value={form.monthlyRent} onChange={e=>setForm(f=>({...f,monthlyRent:e.target.value}))} placeholder="0"/></Field>
+            <Field label="Security Deposit ($)"><input style={inputStyle} type="number" value={form.securityDeposit} onChange={e=>setForm(f=>({...f,securityDeposit:e.target.value}))} placeholder="0"/></Field>
+          </Grid2>
+          <Field label="Notes"><textarea style={{...inputStyle,resize:"vertical",minHeight:"60px"}} value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))} placeholder="Special terms, parking, etc."/></Field>
+          <div style={{ display:"flex",gap:"0.75rem",justifyContent:"flex-end",marginTop:"0.25rem" }}>
+            {modal!=="add"&&<BtnDanger onClick={()=>handleDelete(modal.id)}><Icon name="trash" size={14}/>Remove</BtnDanger>}
+            <button onClick={handleSave} style={{ background:"#e07b39",color:"#fff",border:"none",borderRadius:"8px",padding:"0.5rem 1.25rem",cursor:"pointer",fontSize:"0.85rem",fontWeight:600,marginLeft:"auto" }}>Save Tenant</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ─── Vendors (shared) ─────────────────────────────────────────────────────────
+function Vendors({ vendors, isAdmin, invoices, onAdd, onUpdate, onDelete }) {
+  const [modal, setModal] = useState(null);
+  const blank = { name:"",category:CATEGORIES[0],phone:"",email:"",notes:"" };
+  const [form, setForm] = useState(blank);
+
+  async function handleSave() {
+    if (!form.name.trim()) return;
+    if (modal==="add") await onAdd(form); else await onUpdate({...form,id:modal.id});
+    setModal(null);
+  }
+  async function handleDelete(id) {
+    if (!confirm("Delete this vendor?")) return;
+    await onDelete(id); setModal(null);
+  }
+
+  const grouped = CATEGORIES.map(cat=>({ cat, vendors:vendors.filter(v=>v.category===cat) })).filter(g=>g.vendors.length>0);
+
+  return (
+    <div>
+      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"0.5rem" }}>
+        <h2 style={{ margin:0,fontSize:"1.1rem",fontWeight:700,color:"#e8eaf0" }}>Vendors <span style={{ fontSize:"0.7rem",color:"#6b7280",fontWeight:400,fontStyle:"italic" }}>shared across all users</span></h2>
+        <BtnPrimary onClick={()=>{setForm(blank);setModal("add");}}><Icon name="plus" size={14}/>Add Vendor</BtnPrimary>
+      </div>
+      {!isAdmin && <div style={{ fontSize:"0.75rem",color:"#6b7280",marginBottom:"1.25rem" }}>You can add vendors. Only admins can delete them.</div>}
+      {vendors.length===0 && <div style={{ color:"#4b5563",fontSize:"0.9rem",padding:"2rem 0",textAlign:"center" }}>No vendors yet.</div>}
+      {grouped.map(g=>(
+        <div key={g.cat} style={{ marginBottom:"1.5rem" }}>
+          <div style={{ fontSize:"0.7rem",fontWeight:700,color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:"0.6rem",paddingBottom:"0.4rem",borderBottom:"1px solid #1e2430" }}>{g.cat}</div>
+          <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:"0.75rem" }}>
+            {g.vendors.map(v=>{
+              const spent = invoices.filter(i=>i.vendorId===v.id).reduce((s,i)=>s+Number(i.amount),0);
+              return (
+                <div key={v.id} onClick={()=>{setForm({...v});setModal(v);}} style={{ background:"#14181f",border:"1px solid #1e2430",borderRadius:"10px",padding:"1rem",cursor:"pointer" }}>
+                  <div style={{ fontWeight:600,color:"#e8eaf0",fontSize:"0.9rem",marginBottom:"0.25rem" }}>{v.name}</div>
+                  {v.phone&&<div style={{ fontSize:"0.75rem",color:"#6b7280" }}>{v.phone}</div>}
+                  {v.email&&<div style={{ fontSize:"0.75rem",color:"#6b7280" }}>{v.email}</div>}
+                  {v.notes&&<div style={{ fontSize:"0.72rem",color:"#4b5563",marginTop:"0.25rem",fontStyle:"italic" }}>{v.notes}</div>}
+                  <div style={{ marginTop:"0.6rem",fontSize:"0.78rem",color:"#94a3b8",fontFamily:"'DM Mono',monospace" }}>Total paid: {fmt(spent)}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+      {modal && (
+        <Modal title={modal==="add"?"Add Vendor":"Edit Vendor"} onClose={()=>setModal(null)}>
+          <Field label="Vendor Name"><input style={inputStyle} value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="Business name"/></Field>
+          <Field label="Category"><select style={inputStyle} value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))}>{CATEGORIES.map(c=><option key={c}>{c}</option>)}</select></Field>
+          <Grid2>
+            <Field label="Phone"><input style={inputStyle} value={form.phone} onChange={e=>setForm(f=>({...f,phone:e.target.value}))} placeholder="555-0100"/></Field>
+            <Field label="Email"><input style={inputStyle} value={form.email} onChange={e=>setForm(f=>({...f,email:e.target.value}))} placeholder="email@vendor.com"/></Field>
+          </Grid2>
+          <Field label="Notes"><textarea style={{...inputStyle,resize:"vertical",minHeight:"60px"}} value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))} placeholder="Optional notes"/></Field>
+          <div style={{ display:"flex",gap:"0.75rem",justifyContent:"flex-end" }}>
+            {modal!=="add" && isAdmin && <BtnDanger onClick={()=>handleDelete(modal.id)}><Icon name="trash" size={14}/>Delete</BtnDanger>}
+            <button onClick={handleSave} style={{ background:"#e07b39",color:"#fff",border:"none",borderRadius:"8px",padding:"0.5rem 1.25rem",cursor:"pointer",fontSize:"0.85rem",fontWeight:600,marginLeft:"auto" }}>Save</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ─── Invoices ─────────────────────────────────────────────────────────────────
+function Invoices({ invoices, properties, vendors, projects, viewingAs, isAdmin, onAdd, onUpdate, onDelete }) {
+  const [modal, setModal] = useState(null);
+  const [filterProp, setFilterProp] = useState("all");
+  const [filterCat, setFilterCat] = useState("all");
+  const fileRef = useRef();
+  const readOnly = !!viewingAs;
+  const blank = { propertyId:properties[0]?.id||"",vendorId:"",category:CATEGORIES[0],amount:"",date:new Date().toISOString().slice(0,10),description:"",fileName:null };
+  const [form, setForm] = useState(blank);
+
+  async function handleSave() {
+    if (!form.propertyId||!form.amount||!form.date) return;
+    if (modal==="add") await onAdd(form); else await onUpdate({...form,id:modal.id});
+    setModal(null);
+  }
+  async function handleDelete(id) {
+    if (!confirm("Delete this invoice?")) return;
+    await onDelete(id); setModal(null);
+  }
+
+  const filtered = invoices.filter(i=>{
+    if (filterProp!=="all"&&i.propertyId!==filterProp) return false;
+    if (filterCat!=="all"&&i.category!==filterCat) return false;
+    return true;
+  }).sort((a,b)=>new Date(b.date)-new Date(a.date));
+
+  return (
+    <div>
+      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1rem",flexWrap:"wrap",gap:"0.75rem" }}>
+        <h2 style={{ margin:0,fontSize:"1.1rem",fontWeight:700,color:"#e8eaf0" }}>Invoices {viewingAs&&<OwnerTag email={viewingAs.email} name={viewingAs.full_name}/>}</h2>
+        <div style={{ display:"flex",gap:"0.5rem",alignItems:"center",flexWrap:"wrap" }}>
+          <select style={{...inputStyle,width:"auto"}} value={filterProp} onChange={e=>setFilterProp(e.target.value)}>
+            <option value="all">All Properties</option>
+            {properties.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+          <select style={{...inputStyle,width:"auto"}} value={filterCat} onChange={e=>setFilterCat(e.target.value)}>
+            <option value="all">All Categories</option>
+            {CATEGORIES.map(c=><option key={c}>{c}</option>)}
+          </select>
+          {!readOnly && <BtnPrimary onClick={()=>{setForm({...blank,propertyId:properties[0]?.id||""});setModal("add");}}><Icon name="plus" size={14}/>Add Invoice</BtnPrimary>}
+        </div>
+      </div>
+
+      {!readOnly && <InvoiceDropZone vendors={vendors} properties={properties} projects={projects||[]} onConfirm={f=>onAdd(f)}/>}
+
+      <div style={{ background:"#14181f",border:"1px solid #1e2430",borderRadius:"12px",overflow:"hidden" }}>
+        <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",padding:"0.75rem 1.25rem",borderBottom:"1px solid #1e2430",background:"#0d1117" }}>
+          <span style={{ fontSize:"0.75rem",color:"#6b7280",fontWeight:600,textTransform:"uppercase",letterSpacing:"0.06em" }}>{filtered.length} records</span>
+          <span style={{ fontFamily:"'DM Mono',monospace",fontSize:"0.9rem",fontWeight:700,color:"#e07b39" }}>{fmt(filtered.reduce((s,i)=>s+Number(i.amount),0))}</span>
+        </div>
+        {filtered.length===0 && <div style={{ padding:"2rem",color:"#4b5563",fontSize:"0.9rem",textAlign:"center" }}>No invoices match this filter.</div>}
+        {filtered.map(inv=>{
+          const prop = properties.find(p=>p.id===inv.propertyId);
+          const vend = vendors.find(v=>v.id===inv.vendorId);
+          return (
+            <div key={inv.id} onClick={()=>!readOnly&&(setForm({...inv}),setModal(inv))} style={{ display:"flex",alignItems:"center",padding:"0.85rem 1.25rem",borderBottom:"1px solid #1a1f2b",cursor:readOnly?"default":"pointer" }}
+              onMouseEnter={e=>!readOnly&&(e.currentTarget.style.background="#1a1f2b")} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+              <div style={{ width:"4px",height:"36px",borderRadius:"99px",background:prop?.color||"#6b7280",marginRight:"1rem",flexShrink:0 }}/>
+              <div style={{ flex:1,minWidth:0 }}>
+                <div style={{ display:"flex",alignItems:"center",gap:"0.5rem",marginBottom:"0.2rem" }}>
+                  <span style={{ fontSize:"0.88rem",fontWeight:600,color:"#e8eaf0" }}>{vend?.name||"Unknown Vendor"}</span>
+                  <span style={{ fontSize:"0.68rem",background:"#1e2430",color:"#6b7280",borderRadius:"4px",padding:"1px 6px" }}>{inv.category}</span>
+                  {isAdmin&&inv.ownerName&&<OwnerTag email={inv.ownerEmail} name={inv.ownerName}/>}
+                </div>
+                <div style={{ fontSize:"0.75rem",color:"#6b7280" }}>{prop?.name} · {inv.date}{inv.description?" · "+inv.description:""}</div>
+              </div>
+              <div style={{ fontFamily:"'DM Mono',monospace",fontSize:"1rem",fontWeight:700,color:"#e8eaf0",marginLeft:"1rem" }}>{fmt(inv.amount)}</div>
+            </div>
+          );
+        })}
+      </div>
+
+      {modal && !readOnly && (
+        <Modal title={modal==="add"?"Add Invoice":"Edit Invoice"} onClose={()=>setModal(null)}>
+          <Grid2>
+            <Field label="Property"><select style={inputStyle} value={form.propertyId} onChange={e=>setForm(f=>({...f,propertyId:e.target.value}))}><option value="">Select…</option>{properties.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></Field>
+            <Field label="Vendor"><select style={inputStyle} value={form.vendorId} onChange={e=>setForm(f=>({...f,vendorId:e.target.value}))}><option value="">Select…</option>{vendors.map(v=><option key={v.id} value={v.id}>{v.name}</option>)}</select></Field>
+          </Grid2>
+          <Grid2>
+            <Field label="Category"><select style={inputStyle} value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))}>{CATEGORIES.map(c=><option key={c}>{c}</option>)}</select></Field>
+            <Field label="Amount ($)"><input style={inputStyle} type="number" value={form.amount} onChange={e=>setForm(f=>({...f,amount:e.target.value}))} placeholder="0.00"/></Field>
+          </Grid2>
+          <Field label="Date"><input style={inputStyle} type="date" value={form.date} onChange={e=>setForm(f=>({...f,date:e.target.value}))}/></Field>
+          <Field label="Description"><input style={inputStyle} value={form.description} onChange={e=>setForm(f=>({...f,description:e.target.value}))} placeholder="Brief description…"/></Field>
+          <div style={{ display:"flex",gap:"0.75rem",justifyContent:"flex-end" }}>
+            {modal!=="add"&&<BtnDanger onClick={()=>handleDelete(modal.id)}><Icon name="trash" size={14}/>Delete</BtnDanger>}
+            <button onClick={handleSave} style={{ background:"#e07b39",color:"#fff",border:"none",borderRadius:"8px",padding:"0.5rem 1.25rem",cursor:"pointer",fontSize:"0.85rem",fontWeight:600,marginLeft:"auto" }}>Save Invoice</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ─── Projects (simplified — tasks stored as JSONB) ────────────────────────────
+function Projects({ projects, properties, vendors, invoices, viewingAs, isAdmin, onAdd, onUpdate, onDelete, onAddInvoice }) {
+  const [view, setView] = useState(null);
+  const [showModal, setShowModal] = useState(false);
+  const [filterStatus, setFilterStatus] = useState("all");
+  const readOnly = !!viewingAs;
+
+  const blank = { name:"",description:"",propertyId:properties[0]?.id||"",status:"Planning",vendorIds:[],startDate:"",endDate:"",tasks:[] };
+  const [form, setForm] = useState(blank);
+
+  async function handleAdd() {
+    if (!form.name.trim()) return;
+    await onAdd(form); setForm(blank); setShowModal(false);
+  }
+
+  if (view) {
+    const project = projects.find(p=>p.id===view);
+    if (!project) { setView(null); return null; }
+    return <ProjectDetail project={project} projects={projects} vendors={vendors} properties={properties} invoices={invoices} readOnly={readOnly} isAdmin={isAdmin} onUpdate={onUpdate} onDelete={onDelete} onAddInvoice={onAddInvoice} onBack={()=>setView(null)}/>;
+  }
+
+  const filtered = projects.filter(p=>filterStatus==="all"||p.status===filterStatus);
+
+  return (
+    <div>
+      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1.25rem",flexWrap:"wrap",gap:"0.75rem" }}>
+        <h2 style={{ margin:0,fontSize:"1.1rem",fontWeight:700,color:"#e8eaf0" }}>Projects {viewingAs&&<OwnerTag email={viewingAs.email} name={viewingAs.full_name}/>}</h2>
+        <div style={{ display:"flex",gap:"0.5rem",alignItems:"center",flexWrap:"wrap" }}>
+          <select style={{...inputStyle,width:"auto"}} value={filterStatus} onChange={e=>setFilterStatus(e.target.value)}>
+            <option value="all">All Statuses</option>
+            {PROJECT_STATUSES.map(s=><option key={s} value={s}>{s}</option>)}
+          </select>
+          {!readOnly && <BtnPrimary onClick={()=>setShowModal(true)}><Icon name="plus" size={14}/>New Project</BtnPrimary>}
+        </div>
+      </div>
+
+      <div style={{ display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:"0.75rem",marginBottom:"1.5rem" }}>
+        {PROJECT_STATUSES.map(s=>{ const count=projects.filter(p=>p.status===s).length; const color=PROJECT_STATUS_COLORS[s]; return (
+          <div key={s} onClick={()=>setFilterStatus(filterStatus===s?"all":s)} style={{ background:"#14181f",border:`1px solid ${filterStatus===s?color:"#1e2430"}`,borderRadius:"10px",padding:"0.75rem 1rem",cursor:"pointer",borderTop:`2px solid ${color}` }}>
+            <div style={{ fontSize:"0.62rem",color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:"2px" }}>{s}</div>
+            <div style={{ fontSize:"1.3rem",fontWeight:700,color,fontFamily:"'DM Mono',monospace" }}>{count}</div>
+          </div>
+        ); })}
+      </div>
+
+      {!readOnly && <InvoiceDropZone vendors={vendors} properties={properties} projects={projects} onConfirm={f=>onAddInvoice(f)}/>}
+
+      {filtered.length===0 && <div style={{ background:"#14181f",border:"1px dashed #2a2f3d",borderRadius:"12px",padding:"3rem",textAlign:"center",color:"#4b5563",fontSize:"0.9rem" }}>{projects.length===0?"No projects yet.":"No projects match this filter."}</div>}
+
+      <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:"1rem" }}>
+        {filtered.map(p=>{
+          const prop = properties.find(pr=>pr.id===p.propertyId);
+          const tasks = p.tasks||[]; const done = tasks.filter(t=>t.status==="done").length;
+          const pct = tasks.length>0?Math.round((done/tasks.length)*100):0;
+          const color = PROJECT_STATUS_COLORS[p.status]||"#6b7280";
+          const budget = tasks.reduce((s,t)=>s+Number(t.budget||0),0);
+          const actual = tasks.reduce((s,t)=>s+Number(t.actual||0),0);
+          return (
+            <div key={p.id} onClick={()=>setView(p.id)} style={{ background:"#14181f",border:"1px solid #1e2430",borderRadius:"12px",padding:"1.25rem",cursor:"pointer",borderTop:`3px solid ${color}` }}>
+              <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"0.5rem" }}>
+                <div style={{ fontWeight:700,fontSize:"0.98rem",color:"#e8eaf0",flex:1,paddingRight:"0.5rem" }}>{p.name}</div>
+                <Badge color={color} label={p.status}/>
+              </div>
+              {prop&&<div style={{ fontSize:"0.72rem",color:"#6b7280",marginBottom:"0.6rem",display:"flex",alignItems:"center",gap:"4px" }}><span style={{ width:"6px",height:"6px",borderRadius:"50%",background:prop.color,display:"inline-block" }}/>{prop.name}</div>}
+              {p.description&&<p style={{ margin:"0 0 0.75rem",fontSize:"0.78rem",color:"#6b7280",lineHeight:1.4 }}>{p.description}</p>}
+              {tasks.length>0&&<div style={{ marginBottom:"0.75rem" }}>
+                <div style={{ display:"flex",justifyContent:"space-between",fontSize:"0.68rem",color:"#6b7280",marginBottom:"4px" }}><span>{done}/{tasks.length} tasks</span><span>{pct}%</span></div>
+                <div style={{ height:"4px",background:"#1e2430",borderRadius:"99px",overflow:"hidden" }}><div style={{ height:"100%",width:`${pct}%`,background:pct===100?"#4a7c59":"#e07b39",borderRadius:"99px" }}/></div>
+              </div>}
+              {(budget>0||actual>0)&&<div style={{ display:"flex",gap:"1rem" }}>
+                {budget>0&&<div><div style={{ fontSize:"0.62rem",color:"#6b7280",textTransform:"uppercase" }}>Budget</div><div style={{ fontSize:"0.88rem",fontWeight:600,color:"#e07b39",fontFamily:"'DM Mono',monospace" }}>{fmt(budget)}</div></div>}
+                {actual>0&&<div><div style={{ fontSize:"0.62rem",color:"#6b7280",textTransform:"uppercase" }}>Actual</div><div style={{ fontSize:"0.88rem",fontWeight:600,color:actual>budget?"#f87171":"#4a7c59",fontFamily:"'DM Mono',monospace" }}>{fmt(actual)}</div></div>}
+              </div>}
+              {isAdmin&&p.ownerName&&<div style={{ marginTop:"0.5rem" }}><OwnerTag email={p.ownerEmail} name={p.ownerName}/></div>}
+            </div>
+          );
+        })}
+      </div>
+
+      {showModal && !readOnly && (
+        <Modal title="New Project" onClose={()=>setShowModal(false)} wide>
+          <Field label="Project Name"><input style={inputStyle} value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="e.g. Kitchen Renovation"/></Field>
+          <Field label="Description"><textarea style={{...inputStyle,resize:"vertical",minHeight:"60px"}} value={form.description} onChange={e=>setForm(f=>({...f,description:e.target.value}))} placeholder="What's being done?"/></Field>
+          <Grid2>
+            <Field label="Property"><select style={inputStyle} value={form.propertyId} onChange={e=>setForm(f=>({...f,propertyId:e.target.value}))}><option value="">Select…</option>{properties.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></Field>
+            <Field label="Status"><select style={inputStyle} value={form.status} onChange={e=>setForm(f=>({...f,status:e.target.value}))}>{PROJECT_STATUSES.map(s=><option key={s}>{s}</option>)}</select></Field>
+          </Grid2>
+          <Grid2>
+            <Field label="Start Date"><input style={inputStyle} type="date" value={form.startDate} onChange={e=>setForm(f=>({...f,startDate:e.target.value}))}/></Field>
+            <Field label="Target End"><input style={inputStyle} type="date" value={form.endDate} onChange={e=>setForm(f=>({...f,endDate:e.target.value}))}/></Field>
+          </Grid2>
+          <SectionDivider label="Attach Vendors (optional)"/>
+          <div style={{ display:"flex",flexWrap:"wrap",gap:"0.4rem",marginBottom:"0.5rem" }}>
+            {vendors.map(v=>{ const sel=(form.vendorIds||[]).includes(v.id); return (
+              <button key={v.id} onClick={()=>setForm(f=>({...f,vendorIds:sel?f.vendorIds.filter(id=>id!==v.id):[...(f.vendorIds||[]),v.id]}))} style={{ fontSize:"0.78rem",padding:"4px 10px",borderRadius:"6px",border:`1px solid ${sel?"#e07b39":"#2a2f3d"}`,background:sel?"#e07b3922":"#1e2430",color:sel?"#e07b39":"#6b7280",cursor:"pointer",fontWeight:sel?600:400 }}>{v.name}</button>
+            ); })}
+          </div>
+          <div style={{ display:"flex",gap:"0.75rem",justifyContent:"flex-end",marginTop:"0.5rem" }}>
+            <BtnSecondary onClick={()=>setShowModal(false)}>Cancel</BtnSecondary>
+            <BtnPrimary onClick={handleAdd}><Icon name="plus" size={13}/>Create Project</BtnPrimary>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ─── Project Detail ───────────────────────────────────────────────────────────
+function ProjectDetail({ project, projects, vendors, properties, invoices, readOnly, isAdmin, onUpdate, onDelete, onAddInvoice, onBack }) {
+  const [showTaskModal, setShowTaskModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const blankTask = { title:"",type:TASK_TYPES[0],vendorId:"",status:"todo",budget:"",actual:"",notes:"",photos:[] };
+  const [taskForm, setTaskForm] = useState(blankTask);
+  const [lightbox, setLightbox] = useState(null);
+
+  const live = projects.find(p=>p.id===project.id)||project;
+  const tasks = live.tasks||[];
+  const done = tasks.filter(t=>t.status==="done").length;
+  const totalBudget = tasks.reduce((s,t)=>s+Number(t.budget||0),0);
+  const totalActual = tasks.reduce((s,t)=>s+Number(t.actual||0),0);
+  const prop = properties.find(p=>p.id===live.propertyId);
+  const color = PROJECT_STATUS_COLORS[live.status]||"#6b7280";
+  const attachedVendors = (live.vendorIds||[]).map(id=>vendors.find(v=>v.id===id)).filter(Boolean);
+
+  function saveTasksUpdate(newTasks) { onUpdate({ ...live, tasks:newTasks }); }
+  function addTask() {
+    if (!taskForm.title.trim()) return;
+    saveTasksUpdate([...tasks,{...taskForm,id:uid()}]);
+    setTaskForm(blankTask); setShowTaskModal(false);
+  }
+  function updateTask(t) { saveTasksUpdate(tasks.map(x=>x.id===t.id?t:x)); }
+  function deleteTask(id) { if(!confirm("Delete task?"))return; saveTasksUpdate(tasks.filter(t=>t.id!==id)); }
+
+  return (
+    <div>
+      {lightbox&&<div onClick={()=>setLightbox(null)} style={{ position:"fixed",inset:0,background:"rgba(0,0,0,0.92)",zIndex:2000,display:"flex",alignItems:"center",justifyContent:"center",cursor:"zoom-out" }}><img src={lightbox} alt="" style={{ maxWidth:"90vw",maxHeight:"90vh",borderRadius:"8px",objectFit:"contain" }}/></div>}
+
+      <button onClick={onBack} style={{ display:"flex",alignItems:"center",gap:"6px",background:"none",border:"none",color:"#6b7280",cursor:"pointer",fontSize:"0.83rem",marginBottom:"1.25rem",padding:0 }}>
+        <Icon name="arrowLeft" size={14}/>Back to Projects
+      </button>
+
+      <div style={{ background:"#14181f",border:"1px solid #1e2430",borderRadius:"14px",padding:"1.5rem",marginBottom:"1.25rem",borderTop:`3px solid ${color}` }}>
+        <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:"0.75rem",marginBottom:"0.75rem" }}>
+          <div>
+            <h2 style={{ margin:"0 0 0.25rem",fontSize:"1.2rem",fontWeight:700,color:"#e8eaf0" }}>{live.name}</h2>
+            {prop&&<div style={{ fontSize:"0.78rem",color:"#6b7280",display:"flex",alignItems:"center",gap:"5px" }}><span style={{ width:"8px",height:"8px",borderRadius:"50%",background:prop.color,display:"inline-block" }}/>{prop.name}</div>}
+          </div>
+          <div style={{ display:"flex",gap:"0.5rem",alignItems:"center" }}>
+            <Badge color={color} label={live.status}/>
+            {!readOnly&&<BtnSecondary onClick={()=>setShowEditModal(true)}><Icon name="wrench" size={13}/>Edit</BtnSecondary>}
+          </div>
+        </div>
+        {live.description&&<p style={{ margin:"0 0 1rem",fontSize:"0.85rem",color:"#94a3b8",lineHeight:1.5 }}>{live.description}</p>}
+        <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(110px,1fr))",gap:"0.75rem",paddingTop:"0.75rem",borderTop:"1px solid #1e2430" }}>
+          {[{l:"Tasks",v:`${done}/${tasks.length}`,c:"#3b6fa0"},{l:"Budget",v:fmt(totalBudget),c:"#e07b39"},{l:"Actual",v:fmt(totalActual),c:totalActual>totalBudget?"#f87171":"#4a7c59"},{l:"Over/Under",v:(totalBudget-totalActual>=0?"−":"+")+fmt(Math.abs(totalBudget-totalActual)),c:totalActual>totalBudget?"#f87171":"#4a7c59"}].map(x=>(
+            <div key={x.l}><div style={{ fontSize:"0.62rem",color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:"2px" }}>{x.l}</div><div style={{ fontSize:"1rem",fontWeight:700,color:x.c,fontFamily:"'DM Mono',monospace" }}>{x.v}</div></div>
+          ))}
+        </div>
+        {attachedVendors.length>0&&<div style={{ marginTop:"1rem",paddingTop:"0.75rem",borderTop:"1px solid #1e2430" }}>
+          <div style={{ fontSize:"0.65rem",color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:"0.4rem" }}>Vendors</div>
+          <div style={{ display:"flex",flexWrap:"wrap",gap:"0.4rem" }}>{attachedVendors.map(v=><span key={v.id} style={{ fontSize:"0.75rem",background:"#1e2430",color:"#94a3b8",border:"1px solid #2a2f3d",borderRadius:"6px",padding:"2px 8px" }}>{v.name}</span>)}</div>
+        </div>}
+      </div>
+
+      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1rem" }}>
+        <div style={{ fontSize:"0.72rem",fontWeight:700,color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.07em" }}>Tasks ({tasks.length})</div>
+        {!readOnly&&<BtnPrimary onClick={()=>setShowTaskModal(true)}><Icon name="plus" size={13}/>Add Task</BtnPrimary>}
+      </div>
+
+      {tasks.length===0&&<div style={{ background:"#14181f",border:"1px dashed #2a2f3d",borderRadius:"10px",padding:"2.5rem",textAlign:"center",color:"#4b5563",fontSize:"0.85rem" }}>No tasks yet.</div>}
+
+      {["in-progress","todo","done"].map(s=>{
+        const group = tasks.filter(t=>(t.status||"todo")===s);
+        if (!group.length) return null;
+        const labels={todo:"To Do","in-progress":"In Progress",done:"Done"};
+        const colors={todo:"#6b7280","in-progress":"#b45309",done:"#4a7c59"};
+        return (
+          <div key={s} style={{ marginBottom:"1.5rem" }}>
+            <div style={{ fontSize:"0.68rem",fontWeight:700,color:colors[s],textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:"0.5rem",display:"flex",alignItems:"center",gap:"6px" }}>
+              <span style={{ width:"6px",height:"6px",borderRadius:"50%",background:colors[s],display:"inline-block" }}/>{labels[s]} · {group.length}
+            </div>
+            {group.map(task=>(
+              <TaskCard key={task.id} task={task} vendors={vendors} readOnly={readOnly} onUpdate={updateTask} onDelete={deleteTask} onLightbox={setLightbox}/>
+            ))}
+          </div>
+        );
+      })}
+
+      {showTaskModal&&!readOnly&&(
+        <Modal title="Add Task" onClose={()=>setShowTaskModal(false)} wide>
+          <Field label="Task Title"><input style={inputStyle} value={taskForm.title} onChange={e=>setTaskForm(f=>({...f,title:e.target.value}))} placeholder="e.g. Replace roof shingles"/></Field>
+          <Grid2>
+            <Field label="Task Type"><select style={inputStyle} value={taskForm.type} onChange={e=>setTaskForm(f=>({...f,type:e.target.value}))}>{TASK_TYPES.map(t=><option key={t}>{t}</option>)}</select></Field>
+            <Field label="Assigned Vendor"><select style={inputStyle} value={taskForm.vendorId} onChange={e=>setTaskForm(f=>({...f,vendorId:e.target.value}))}><option value="">None / TBD</option>{vendors.map(v=><option key={v.id} value={v.id}>{v.name}</option>)}</select></Field>
+          </Grid2>
+          <Grid2>
+            <Field label="Budget ($)"><input style={inputStyle} type="number" value={taskForm.budget} onChange={e=>setTaskForm(f=>({...f,budget:e.target.value}))} placeholder="0"/></Field>
+            <Field label="Actual Cost ($)"><input style={inputStyle} type="number" value={taskForm.actual} onChange={e=>setTaskForm(f=>({...f,actual:e.target.value}))} placeholder="0"/></Field>
+          </Grid2>
+          <Field label="Notes"><textarea style={{...inputStyle,resize:"vertical",minHeight:"64px"}} value={taskForm.notes} onChange={e=>setTaskForm(f=>({...f,notes:e.target.value}))} placeholder="Scope, instructions…"/></Field>
+          <div style={{ display:"flex",gap:"0.75rem",justifyContent:"flex-end" }}>
+            <BtnSecondary onClick={()=>setShowTaskModal(false)}>Cancel</BtnSecondary>
+            <BtnPrimary onClick={addTask}><Icon name="plus" size={13}/>Add Task</BtnPrimary>
+          </div>
+        </Modal>
+      )}
+
+      {showEditModal&&!readOnly&&(
+        <Modal title="Edit Project" onClose={()=>setShowEditModal(false)} wide>
+          <Field label="Project Name"><input style={inputStyle} value={live.name} onChange={e=>onUpdate({...live,name:e.target.value})}/></Field>
+          <Field label="Description"><textarea style={{...inputStyle,resize:"vertical",minHeight:"60px"}} value={live.description||""} onChange={e=>onUpdate({...live,description:e.target.value})}/></Field>
+          <Grid2>
+            <Field label="Property"><select style={inputStyle} value={live.propertyId||""} onChange={e=>onUpdate({...live,propertyId:e.target.value})}><option value="">Select…</option>{properties.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></Field>
+            <Field label="Status"><select style={inputStyle} value={live.status} onChange={e=>onUpdate({...live,status:e.target.value})}>{PROJECT_STATUSES.map(s=><option key={s}>{s}</option>)}</select></Field>
+          </Grid2>
+          <Grid2>
+            <Field label="Start Date"><input style={inputStyle} type="date" value={live.startDate||""} onChange={e=>onUpdate({...live,startDate:e.target.value})}/></Field>
+            <Field label="Target End"><input style={inputStyle} type="date" value={live.endDate||""} onChange={e=>onUpdate({...live,endDate:e.target.value})}/></Field>
+          </Grid2>
+          <SectionDivider label="Attached Vendors"/>
+          <div style={{ display:"flex",flexWrap:"wrap",gap:"0.4rem",marginBottom:"1rem" }}>
+            {vendors.map(v=>{ const sel=(live.vendorIds||[]).includes(v.id); return (
+              <button key={v.id} onClick={()=>onUpdate({...live,vendorIds:sel?(live.vendorIds||[]).filter(id=>id!==v.id):[...(live.vendorIds||[]),v.id]})} style={{ fontSize:"0.78rem",padding:"4px 10px",borderRadius:"6px",border:`1px solid ${sel?"#e07b39":"#2a2f3d"}`,background:sel?"#e07b3922":"#1e2430",color:sel?"#e07b39":"#6b7280",cursor:"pointer",fontWeight:sel?600:400 }}>{v.name}</button>
+            ); })}
+          </div>
+          <div style={{ display:"flex",gap:"0.75rem",justifyContent:"flex-end" }}>
+            <BtnDanger onClick={async()=>{ if(!confirm("Delete project?"))return; await onDelete(live.id); setShowEditModal(false); onBack(); }}><Icon name="trash" size={13}/>Delete</BtnDanger>
+            <BtnSecondary onClick={()=>setShowEditModal(false)}>Done</BtnSecondary>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ─── Task Card ────────────────────────────────────────────────────────────────
+function TaskCard({ task, vendors, readOnly, onUpdate, onDelete, onLightbox }) {
+  const [expanded, setExpanded] = useState(false);
+  const fileRef = useRef();
+  const vendor = vendors.find(v=>v.id===task.vendorId);
+  const statusColor = { todo:"#6b7280","in-progress":"#b45309",done:"#4a7c59" }[task.status||"todo"];
+  const statusLabel = { todo:"To Do","in-progress":"In Progress",done:"Done" }[task.status||"todo"];
+
+  function cycleStatus() {
+    if (readOnly) return;
+    const cycle = { todo:"in-progress","in-progress":"done",done:"todo" };
+    onUpdate({...task,status:cycle[task.status||"todo"]});
+  }
+
+  function handlePhotos(e) {
+    const files = Array.from(e.target.files);
+    Promise.all(files.map(f=>new Promise(res=>{ const r=new FileReader(); r.onload=()=>res({id:uid(),name:f.name,dataUrl:r.result}); r.readAsDataURL(f); }))).then(photos=>onUpdate({...task,photos:[...(task.photos||[]),...photos]}));
+  }
+
+  return (
+    <div style={{ background:"#0d1117",border:"1px solid #1e2430",borderRadius:"10px",marginBottom:"0.6rem",overflow:"hidden" }}>
+      <div style={{ display:"flex",alignItems:"center",gap:"0.75rem",padding:"0.85rem 1rem",cursor:"pointer" }} onClick={()=>setExpanded(x=>!x)}>
+        <button onClick={e=>{e.stopPropagation();cycleStatus();}} style={{ width:"20px",height:"20px",borderRadius:"50%",border:`2px solid ${statusColor}`,background:task.status==="done"?statusColor:"transparent",flexShrink:0,cursor:readOnly?"default":"pointer",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff" }}>
+          {task.status==="done"&&<Icon name="check" size={10}/>}
+        </button>
+        <div style={{ flex:1,minWidth:0 }}>
+          <div style={{ display:"flex",alignItems:"center",gap:"0.5rem",flexWrap:"wrap" }}>
+            <span style={{ fontSize:"0.88rem",fontWeight:600,color:task.status==="done"?"#4b5563":"#e8eaf0",textDecoration:task.status==="done"?"line-through":"none" }}>{task.title}</span>
+            <span style={{ fontSize:"0.65rem",background:statusColor+"22",color:statusColor,border:`1px solid ${statusColor}44`,borderRadius:"99px",padding:"1px 7px",fontWeight:700,textTransform:"uppercase" }}>{statusLabel}</span>
+            {task.type&&<span style={{ fontSize:"0.65rem",background:"#1e2430",color:"#6b7280",borderRadius:"4px",padding:"1px 6px" }}>{task.type}</span>}
+          </div>
+          <div style={{ fontSize:"0.72rem",color:"#6b7280",marginTop:"2px" }}>
+            {vendor&&<span style={{ color:"#94a3b8" }}>{vendor.name} · </span>}
+            {task.budget&&<span style={{ color:"#e07b39",fontFamily:"'DM Mono',monospace" }}>{fmt(task.budget)}</span>}
+            {task.actual&&<span style={{ color:"#4a7c59",fontFamily:"'DM Mono',monospace" }}> / {fmt(task.actual)} actual</span>}
+            {(task.photos||[]).length>0&&<span style={{ marginLeft:"6px",color:"#3b6fa0" }}>· {task.photos.length} photo{task.photos.length!==1?"s":""}</span>}
+          </div>
+        </div>
+        <div style={{ color:"#4b5563",flexShrink:0,transition:"transform 0.2s",transform:expanded?"rotate(90deg)":"none" }}><Icon name="chevronRight" size={14}/></div>
+      </div>
+
+      {expanded&&(
+        <div style={{ borderTop:"1px solid #1e2430",padding:"1rem" }}>
+          {task.notes&&<p style={{ margin:"0 0 1rem",fontSize:"0.82rem",color:"#94a3b8",lineHeight:1.5 }}>{task.notes}</p>}
+          <div style={{ fontSize:"0.7rem",fontWeight:700,color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:"0.6rem" }}>Photos</div>
+          <div style={{ display:"flex",flexWrap:"wrap",gap:"0.5rem",marginBottom:"0.75rem" }}>
+            {(task.photos||[]).map(photo=>(
+              <div key={photo.id} style={{ position:"relative",width:"72px",height:"72px",borderRadius:"8px",overflow:"hidden",border:"1px solid #2a2f3d",flexShrink:0 }}>
+                <img src={photo.dataUrl} alt={photo.name} style={{ width:"100%",height:"100%",objectFit:"cover",cursor:"zoom-in" }} onClick={()=>onLightbox(photo.dataUrl)}/>
+                {!readOnly&&<button onClick={()=>onUpdate({...task,photos:(task.photos||[]).filter(p=>p.id!==photo.id)})} style={{ position:"absolute",top:"2px",right:"2px",background:"rgba(0,0,0,0.7)",border:"none",borderRadius:"50%",width:"18px",height:"18px",color:"#f87171",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",padding:0 }}><Icon name="x" size={10}/></button>}
+              </div>
+            ))}
+            {!readOnly&&<label style={{ width:"72px",height:"72px",borderRadius:"8px",border:"1px dashed #2a2f3d",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",cursor:"pointer",color:"#4b5563",gap:"4px",flexShrink:0 }}>
+              <input ref={fileRef} type="file" accept="image/*" multiple style={{ display:"none" }} onChange={handlePhotos}/>
+              <Icon name="image" size={16}/><span style={{ fontSize:"0.6rem",textAlign:"center",lineHeight:1.2 }}>Add<br/>Photo</span>
+            </label>}
+          </div>
+          {!readOnly&&<div style={{ display:"flex",gap:"0.5rem",justifyContent:"flex-end" }}>
+            <BtnDanger onClick={()=>onDelete(task.id)}><Icon name="trash" size={12}/>Delete</BtnDanger>
+          </div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Root App ─────────────────────────────────────────────────────────────────
+export default function App() {
+  const [session, setSession] = useState(undefined); // undefined = loading
+  const [profile, setProfile] = useState(null);
+  const [profiles, setProfiles] = useState([]);      // all users (admin only)
+  const [viewingAs, setViewingAs] = useState(null);  // admin impersonation
+  const [tab, setTab] = useState("dashboard");
+
+  const [properties, setProperties] = useState([]);
+  const [tenants, setTenants]       = useState([]);
+  const [vendors, setVendors]       = useState([]);
+  const [invoices, setInvoices]     = useState([]);
+  const [projects, setProjects]     = useState([]);
+
+  const isAdmin = profile?.role === "admin";
+  // The userId whose data we load (admin can switch viewingAs)
+  const targetUserId = viewingAs ? viewingAs.id : session?.user?.id;
+
+  // ── Auth listener ───────────────────────────────────────────
+  useEffect(()=>{
+    supabase.auth.getSession().then(({ data })=>setSession(data.session||null));
+    const { data:{ subscription } } = supabase.auth.onAuthStateChange((_,s)=>setSession(s));
+    return ()=>subscription.unsubscribe();
+  },[]);
+
+  // ── Load profile + all profiles (admin) ─────────────────────
+  useEffect(()=>{
+    if (!session) { setProfile(null); setProfiles([]); return; }
+    supabase.from("profiles").select("*").eq("id",session.user.id).single()
+      .then(({ data })=>{ if(data) setProfile(data); });
+  },[session]);
+
+  useEffect(()=>{
+    if (!isAdmin) return;
+    supabase.from("profiles").select("*").then(({ data })=>{ if(data) setProfiles(data); });
+  },[isAdmin]);
+
+  // ── Load data whenever targetUserId changes ──────────────────
+  const loadData = useCallback(async ()=>{
+    if (!targetUserId) return;
+    const uid = targetUserId;
+    // For admin viewing another user, use views that bypass RLS
+    const propTable = isAdmin && viewingAs ? "admin_all_properties" : "properties";
+    const tenTable  = isAdmin && viewingAs ? "admin_all_tenants"    : "tenants";
+    const invTable  = isAdmin && viewingAs ? "admin_all_invoices"   : "invoices";
+    const projTable = isAdmin && viewingAs ? "admin_all_projects"   : "projects";
+
+    const filter = isAdmin && viewingAs ? { column:"owner_id", value:uid } : null;
+
+    async function q(table, mapper) {
+      let query = supabase.from(table).select("*");
+      if (filter) query = query.eq(filter.column, filter.value);
+      const { data } = await query;
+      return (data||[]).map(mapper);
+    }
+
+    const [props, tens, vends, invs, projs] = await Promise.all([
+      q(propTable, rowToProperty),
+      q(tenTable, rowToTenant),
+      supabase.from("vendors").select("*").then(({data})=>(data||[]).map(rowToVendor)),
+      q(invTable, rowToInvoice),
+      q(projTable, rowToProject),
+    ]);
+    setProperties(props);
+    setTenants(tens);
+    setVendors(vends);
+    setInvoices(invs);
+    setProjects(projs);
+  },[targetUserId, isAdmin, viewingAs]);
+
+  useEffect(()=>{ loadData(); },[loadData]);
+
+  // ── CRUD helpers ─────────────────────────────────────────────
+  async function addProperty(form) {
+    const { data } = await supabase.from("properties").insert({ name:form.name,address:form.address,city:form.city,state:form.state,color:form.color,owner_id:session.user.id }).select().single();
+    if (data) setProperties(p=>[...p,rowToProperty(data)]);
+  }
+  async function updateProperty(form) {
+    const { data } = await supabase.from("properties").update({ name:form.name,address:form.address,city:form.city,state:form.state,color:form.color }).eq("id",form.id).select().single();
+    if (data) setProperties(p=>p.map(x=>x.id===data.id?rowToProperty(data):x));
+  }
+  async function deleteProperty(id) {
+    await supabase.from("properties").delete().eq("id",id);
+    setProperties(p=>p.filter(x=>x.id!==id));
+  }
+
+  async function addTenant(form) {
+    const { data } = await supabase.from("tenants").insert({ owner_id:session.user.id,property_id:form.propertyId,name:form.name,email:form.email,phone:form.phone,unit:form.unit,lease_start:form.leaseStart||null,lease_end:form.leaseEnd||null,monthly_rent:form.monthlyRent||null,security_deposit:form.securityDeposit||null,notes:form.notes,contract_file_name:form.contractFileName }).select().single();
+    if (data) setTenants(t=>[...t,rowToTenant(data)]);
+  }
+  async function updateTenant(form) {
+    const { data } = await supabase.from("tenants").update({ property_id:form.propertyId,name:form.name,email:form.email,phone:form.phone,unit:form.unit,lease_start:form.leaseStart||null,lease_end:form.leaseEnd||null,monthly_rent:form.monthlyRent||null,security_deposit:form.securityDeposit||null,notes:form.notes }).eq("id",form.id).select().single();
+    if (data) setTenants(t=>t.map(x=>x.id===data.id?rowToTenant(data):x));
+  }
+  async function deleteTenant(id) {
+    await supabase.from("tenants").delete().eq("id",id);
+    setTenants(t=>t.filter(x=>x.id!==id));
+  }
+
+  async function addVendor(form) {
+    const { data } = await supabase.from("vendors").insert({ name:form.name,category:form.category,phone:form.phone,email:form.email,notes:form.notes,created_by:session.user.id }).select().single();
+    if (data) setVendors(v=>[...v,rowToVendor(data)]);
+  }
+  async function updateVendor(form) {
+    const { data } = await supabase.from("vendors").update({ name:form.name,category:form.category,phone:form.phone,email:form.email,notes:form.notes }).eq("id",form.id).select().single();
+    if (data) setVendors(v=>v.map(x=>x.id===data.id?rowToVendor(data):x));
+  }
+  async function deleteVendor(id) {
+    await supabase.from("vendors").delete().eq("id",id);
+    setVendors(v=>v.filter(x=>x.id!==id));
+  }
+
+  async function addInvoice(form) {
+    const { data } = await supabase.from("invoices").insert({ owner_id:session.user.id,property_id:form.propertyId||null,vendor_id:form.vendorId||null,project_id:form.projectId||null,category:form.category,amount:form.amount||null,date:form.date||null,description:form.description,file_name:form.fileName,invoice_number:form.invoiceNumber||null }).select().single();
+    if (data) setInvoices(i=>[...i,rowToInvoice(data)]);
+  }
+  async function updateInvoice(form) {
+    const { data } = await supabase.from("invoices").update({ property_id:form.propertyId||null,vendor_id:form.vendorId||null,project_id:form.projectId||null,category:form.category,amount:form.amount||null,date:form.date||null,description:form.description }).eq("id",form.id).select().single();
+    if (data) setInvoices(i=>i.map(x=>x.id===data.id?rowToInvoice(data):x));
+  }
+  async function deleteInvoice(id) {
+    await supabase.from("invoices").delete().eq("id",id);
+    setInvoices(i=>i.filter(x=>x.id!==id));
+  }
+
+  async function addProject(form) {
+    const { data } = await supabase.from("projects").insert({ owner_id:session.user.id,property_id:form.propertyId||null,name:form.name,description:form.description,status:form.status,start_date:form.startDate||null,end_date:form.endDate||null,vendor_ids:form.vendorIds||[],tasks:form.tasks||[] }).select().single();
+    if (data) setProjects(p=>[...p,rowToProject(data)]);
+  }
+  async function updateProject(form) {
+    const { data } = await supabase.from("projects").update({ property_id:form.propertyId||null,name:form.name,description:form.description,status:form.status,start_date:form.startDate||null,end_date:form.endDate||null,vendor_ids:form.vendorIds||[],tasks:form.tasks||[] }).eq("id",form.id).select().single();
+    if (data) setProjects(p=>p.map(x=>x.id===data.id?rowToProject(data):x));
+  }
+  async function deleteProject(id) {
+    await supabase.from("projects").delete().eq("id",id);
+    setProjects(p=>p.filter(x=>x.id!==id));
+  }
+
+  function handleRoleChange(userId, newRole) {
+    setProfiles(p=>p.map(x=>x.id===userId?{...x,role:newRole}:x));
+  }
+
+  // ── Render ───────────────────────────────────────────────────
+  if (session===undefined) return (
+    <div style={{ background:"#0a0c12",minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",color:"#6b7280",fontFamily:"sans-serif" }}>Loading…</div>
+  );
+  if (!session) return <AuthScreen onAuth={setSession}/>;
+
+  const tabs = [
+    { id:"dashboard", label:"Dashboard", icon:"chart" },
+    { id:"properties", label:"Properties", icon:"home" },
+    { id:"tenants", label:"Tenants", icon:"tenant" },
+    { id:"vendors", label:"Vendors", icon:"users" },
+    { id:"invoices", label:"Invoices", icon:"receipt" },
+    { id:"projects", label:"Projects", icon:"wrench" },
+    ...(isAdmin ? [{ id:"members", label:"Members", icon:"shield" }] : []),
+  ];
+
+  return (
+    <>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500;600&display=swap');
+        *{box-sizing:border-box;} body{margin:0;background:#0a0c12;}
+        input,select,textarea{color-scheme:dark;}
+        input:focus,select:focus,textarea:focus{outline:none;border-color:#e07b39!important;}
+        ::-webkit-scrollbar{width:6px;} ::-webkit-scrollbar-track{background:#0d1117;} ::-webkit-scrollbar-thumb{background:#2a2f3d;border-radius:99px;}
+        @keyframes spin{to{transform:rotate(360deg);}}
+      `}</style>
+      <div style={{ fontFamily:"'DM Sans',sans-serif",background:"#0a0c12",minHeight:"100vh",color:"#e8eaf0" }}>
+        {/* Nav */}
+        <div style={{ background:"#0d1117",borderBottom:"1px solid #1e2430",padding:"0 1.5rem",display:"flex",alignItems:"center",height:"56px",position:"sticky",top:0,zIndex:100 }}>
+          <div style={{ display:"flex",alignItems:"center",gap:"0.6rem",marginRight:"2rem",flexShrink:0 }}>
+            <div style={{ width:"28px",height:"28px",background:"#e07b39",borderRadius:"7px",display:"flex",alignItems:"center",justifyContent:"center" }}><Icon name="home" size={14}/></div>
+            <span style={{ fontWeight:700,fontSize:"0.95rem",color:"#e8eaf0" }}>PropTrack</span>
+          </div>
+          <nav style={{ display:"flex",gap:"0.25rem",overflowX:"auto",flex:1 }}>
+            {tabs.map(t=>(
+              <button key={t.id} onClick={()=>setTab(t.id)} style={{ display:"flex",alignItems:"center",gap:"6px",background:tab===t.id?"#1e2430":"none",border:"none",color:tab===t.id?"#e8eaf0":"#6b7280",borderRadius:"7px",padding:"0.4rem 0.75rem",cursor:"pointer",fontSize:"0.83rem",fontWeight:tab===t.id?600:400,whiteSpace:"nowrap",flexShrink:0 }}>
+                <Icon name={t.icon} size={14}/>{t.label}
+              </button>
+            ))}
+          </nav>
+          {/* User info + logout */}
+          <div style={{ display:"flex",alignItems:"center",gap:"0.75rem",marginLeft:"auto",flexShrink:0 }}>
+            <span style={{ fontSize:"0.75rem",color:"#6b7280",display:"flex",alignItems:"center",gap:"4px" }}>
+              {isAdmin&&<Icon name="shield" size={11}/>}{profile?.full_name||session.user.email}
+            </span>
+            <button onClick={()=>supabase.auth.signOut()} style={{ background:"none",border:"1px solid #2a2f3d",borderRadius:"6px",color:"#6b7280",cursor:"pointer",padding:"4px 8px",display:"flex",alignItems:"center",gap:"4px",fontSize:"0.75rem" }}>
+              <Icon name="logout" size={12}/>Sign out
+            </button>
+          </div>
+        </div>
+
+        {/* Admin banner */}
+        {isAdmin && profiles.filter(p=>p.role!=="admin").length>0 && (
+          <AdminBanner profiles={profiles} viewingAs={viewingAs} setViewingAs={(p)=>{ setViewingAs(p); setTab("dashboard"); }}/>
+        )}
+
+        <div style={{ maxWidth:"980px",margin:"0 auto",padding:"1.75rem 1.25rem" }}>
+          {tab==="dashboard"   && <Dashboard properties={properties} invoices={invoices} vendors={vendors} tenants={tenants} projects={projects} isAdmin={isAdmin} viewingAs={viewingAs}/>}
+          {tab==="properties"  && <Properties properties={properties} isAdmin={isAdmin} viewingAs={viewingAs} onAdd={addProperty} onUpdate={updateProperty} onDelete={deleteProperty} invoices={invoices} tenants={tenants}/>}
+          {tab==="tenants"     && <Tenants tenants={tenants} properties={properties} viewingAs={viewingAs} onAdd={addTenant} onUpdate={updateTenant} onDelete={deleteTenant}/>}
+          {tab==="vendors"     && <Vendors vendors={vendors} isAdmin={isAdmin} invoices={invoices} onAdd={addVendor} onUpdate={updateVendor} onDelete={deleteVendor}/>}
+          {tab==="invoices"    && <Invoices invoices={invoices} properties={properties} vendors={vendors} projects={projects} viewingAs={viewingAs} isAdmin={isAdmin} onAdd={addInvoice} onUpdate={updateInvoice} onDelete={deleteInvoice}/>}
+          {tab==="projects"    && <Projects projects={projects} properties={properties} vendors={vendors} invoices={invoices} viewingAs={viewingAs} isAdmin={isAdmin} onAdd={addProject} onUpdate={updateProject} onDelete={deleteProject} onAddInvoice={addInvoice}/>}
+          {tab==="members"     && isAdmin && <MembersTab profiles={profiles} currentUser={profile} onRoleChange={handleRoleChange}/>}
+        </div>
+      </div>
+    </>
+  );
+}
