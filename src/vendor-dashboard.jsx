@@ -332,7 +332,7 @@ Valid categories: ${CATEGORIES.join(", ")}
 Return this exact JSON:
 {"vendorId":null,"vendorNameRaw":"","propertyId":null,"projectId":null,"amount":0,"date":"YYYY-MM-DD","category":"Other","description":"","invoiceNumber":null,"confidence":"medium"}`;
 
-  const body = { model:"claude-sonnet-4-20250514", max_tokens:800, messages:[{ role:"user", content:[{ type:isPdf?"document":"image", source:{ type:"base64", media_type:file.type, data:b64 } },{ type:"text", text:prompt }] }] };
+  const body = { model:"claude-sonnet-4-5", max_tokens:800, messages:[{ role:"user", content:[{ type:isPdf?"document":"image", source:{ type:"base64", media_type:file.type, data:b64 } },{ type:"text", text:prompt }] }] };
   const edgeFnUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/dynamic-worker`;
   const resp = await fetch(edgeFnUrl, { method:"POST", headers:{"Content-Type":"application/json","Authorization":`Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`}, body:JSON.stringify(body) });
   if (!resp.ok) { const errText = await resp.text().catch(()=>""); throw new Error(`API error ${resp.status}${errText?" — "+errText:""}`); }
