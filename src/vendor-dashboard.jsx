@@ -591,6 +591,126 @@ function Dashboard({ properties, invoices, vendors, tenants, projects, isAdmin, 
   );
 }
 
+// ─── AI Property Parser ───────────────────────────────────────────────────────
+async function parsePropertyWithAI(file) {
+  const isImage = file.type.startsWith("image/");
+  const isPdf = file.type === "application/pdf";
+  if (!isImage && !isPdf) throw new Error("Only images and PDFs are supported.");
+  const b64 = await fileToBase64(file);
+
+  const prompt = `You are a real estate property information extractor. Extract address info from this document (listing, lease, deed, screenshot, photo of a property, etc). Return ONLY valid JSON, no markdown.
+
+Valid US state codes: ${US_STATES.join(", ")}
+
+Return this exact JSON:
+{"name":"","address":"","city":"","state":"FL","confidence":"medium"}
+
+- name: a short memorable name for this property (e.g. "Terracina", "Belle View", "Unit 4B Naples") — derive from street name, neighborhood, or complex name
+- address: street address only (no city/state)
+- city: city name
+- state: 2-letter state code
+- confidence: low | medium | high`;
+
+  const body = { model:"claude-sonnet-4-5", max_tokens:400, messages:[{ role:"user", content:[{ type:isPdf?"document":"image", source:{ type:"base64", media_type:file.type, data:b64 } },{ type:"text", text:prompt }] }] };
+  const edgeFnUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/dynamic-worker`;
+  const resp = await fetch(edgeFnUrl, { method:"POST", headers:{"Content-Type":"application/json","Authorization":`Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`}, body:JSON.stringify(body) });
+  if (!resp.ok) { const errText = await resp.text().catch(()=>""); throw new Error(`API error ${resp.status}${errText?" — "+errText:""}`); }
+  const data = await resp.json();
+  const text = data.content?.map(c=>c.text||"").join("")||"";
+  return JSON.parse(text.replace(/```json|```/g,"").trim());
+}
+
+// ─── Property Drop Zone ───────────────────────────────────────────────────────
+function PropertyDropZone({ onConfirm }) {
+  const [dragging, setDragging] = useState(false);
+  const [parsing, setParsing] = useState(false);
+  const [error, setError] = useState(null);
+  const [parsed, setParsed] = useState(null);
+  const [form, setForm] = useState(null);
+  const [previewUrl, setPreviewUrl] = useState(null);
+  const inputRef = useRef();
+  const confidenceColor = { low:"#f87171", medium:"#fbbf24", high:"#4a7c59" };
+
+  async function processFile(f) {
+    if (!f) return;
+    setError(null); setParsed(null); setForm(null);
+    if (f.type.startsWith("image/")) setPreviewUrl(URL.createObjectURL(f)); else setPreviewUrl(null);
+    setParsing(true);
+    try {
+      const result = await parsePropertyWithAI(f);
+      setParsed(result);
+      setForm({
+        name: result.name||"",
+        address: result.address||"",
+        city: result.city||"",
+        state: US_STATES.includes(result.state) ? result.state : "FL",
+        color: PROPERTY_COLORS[0],
+      });
+    } catch(e) { setError(e.message||"Failed to parse property info."); }
+    finally { setParsing(false); }
+  }
+
+  function dismiss() { setParsed(null); setForm(null); setPreviewUrl(null); setError(null); }
+
+  return (
+    <>
+      <div onDrop={e=>{e.preventDefault();setDragging(false);const f=e.dataTransfer.files[0];if(f)processFile(f);}}
+        onDragOver={e=>{e.preventDefault();setDragging(true);}} onDragLeave={()=>setDragging(false)}
+        onClick={()=>inputRef.current?.click()}
+        style={{ border:`2px dashed ${dragging?"#e07b39":"#2a2f3d"}`,borderRadius:"12px",padding:"1.25rem",textAlign:"center",cursor:"pointer",background:dragging?"#1c1407":"#0d1117",transition:"all 0.15s",marginBottom:"1.25rem" }}>
+        <input ref={inputRef} type="file" accept=".pdf,.jpg,.jpeg,.png" style={{ display:"none" }}
+          onChange={e=>{const f=e.target.files[0];if(f)processFile(f);e.target.value="";}}/>
+        {parsing ? (
+          <div style={{ color:"#e07b39",fontSize:"0.85rem",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.5rem" }}><Spinner/>Reading property info with AI…</div>
+        ) : (
+          <div>
+            <div style={{ color:"#4b5563",marginBottom:"0.25rem" }}><Icon name="home" size={18}/></div>
+            <div style={{ fontSize:"0.82rem",color:dragging?"#e07b39":"#6b7280",fontWeight:600 }}>{dragging?"Drop file here":"Drag & drop a listing, lease, deed, or screenshot"}</div>
+            <div style={{ fontSize:"0.7rem",color:"#4b5563",marginTop:"0.2rem" }}>or click to browse · AI extracts property name, address, city, state</div>
+          </div>
+        )}
+      </div>
+      {error && <div style={{ background:"#1c0808",border:"1px solid #5c1f1f",borderRadius:"8px",padding:"0.75rem 1rem",marginBottom:"1rem",fontSize:"0.82rem",color:"#f87171",display:"flex",justifyContent:"space-between",alignItems:"center" }}>{error}<button onClick={()=>setError(null)} style={{ background:"none",border:"none",color:"#f87171",cursor:"pointer",padding:0 }}><Icon name="x" size={13}/></button></div>}
+
+      {form && (
+        <div style={{ position:"fixed",inset:0,background:"rgba(10,12,18,0.85)",zIndex:1200,display:"flex",alignItems:"center",justifyContent:"center",padding:"1rem" }}>
+          <div style={{ background:"#14181f",border:"1px solid #2a2f3d",borderRadius:"14px",width:"100%",maxWidth:"520px",maxHeight:"94vh",overflowY:"auto",boxShadow:"0 24px 64px rgba(0,0,0,0.6)" }}>
+            <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",padding:"1.25rem 1.5rem",borderBottom:"1px solid #1e2430",position:"sticky",top:0,background:"#14181f",zIndex:10 }}>
+              <div>
+                <h3 style={{ margin:0,fontSize:"1rem",fontWeight:700,color:"#e8eaf0" }}>Review Extracted Property</h3>
+                <div style={{ fontSize:"0.72rem",color:"#6b7280",marginTop:"2px" }}>AI confidence: <span style={{ color:confidenceColor[parsed?.confidence]||"#6b7280",fontWeight:700,textTransform:"uppercase" }}>{parsed?.confidence||"—"}</span></div>
+              </div>
+              <button onClick={dismiss} style={{ background:"none",border:"none",color:"#6b7280",cursor:"pointer",padding:"4px",display:"flex" }}><Icon name="x" size={18}/></button>
+            </div>
+            <div style={{ padding:"1.5rem" }}>
+              {previewUrl && <div style={{ marginBottom:"1rem",borderRadius:"8px",overflow:"hidden",border:"1px solid #2a2f3d",maxHeight:"140px",display:"flex",alignItems:"center",justifyContent:"center",background:"#0d1117" }}><img src={previewUrl} alt="" style={{ maxHeight:"140px",maxWidth:"100%",objectFit:"contain" }}/></div>}
+              <Field label="Property Name">
+                <input style={inputStyle} value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="e.g. Terracina"/>
+              </Field>
+              <Field label="Street Address">
+                <input style={inputStyle} value={form.address} onChange={e=>setForm(f=>({...f,address:e.target.value}))} placeholder="123 Main St"/>
+              </Field>
+              <Grid2>
+                <Field label="City"><input style={inputStyle} value={form.city} onChange={e=>setForm(f=>({...f,city:e.target.value}))} placeholder="City"/></Field>
+                <Field label="State"><select style={inputStyle} value={form.state} onChange={e=>setForm(f=>({...f,state:e.target.value}))}>{US_STATES.map(s=><option key={s}>{s}</option>)}</select></Field>
+              </Grid2>
+              <Field label="Color Tag">
+                <div style={{ display:"flex",gap:"0.5rem",flexWrap:"wrap" }}>
+                  {PROPERTY_COLORS.map(c=><div key={c} onClick={()=>setForm(f=>({...f,color:c}))} style={{ width:"28px",height:"28px",borderRadius:"50%",background:c,cursor:"pointer",border:form.color===c?"3px solid #fff":"3px solid transparent" }}/>)}
+                </div>
+              </Field>
+              <div style={{ display:"flex",gap:"0.75rem",justifyContent:"flex-end",marginTop:"0.5rem" }}>
+                <BtnSecondary onClick={dismiss}>Discard</BtnSecondary>
+                <BtnPrimary onClick={()=>{ if(form.name.trim()) { onConfirm(form); dismiss(); } }}><Icon name="check" size={13}/>Save Property</BtnPrimary>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 // ─── Properties ───────────────────────────────────────────────────────────────
 function Properties({ properties, isAdmin, viewingAs, onAdd, onUpdate, onDelete, invoices, tenants }) {
   const [modal, setModal] = useState(null);
@@ -617,6 +737,7 @@ function Properties({ properties, isAdmin, viewingAs, onAdd, onUpdate, onDelete,
         <h2 style={{ margin:0,fontSize:"1.1rem",fontWeight:700,color:"#e8eaf0" }}>Properties {viewingAs&&<OwnerTag email={viewingAs.email} name={viewingAs.full_name}/>}</h2>
         {!readOnly && <BtnPrimary onClick={openAdd}><Icon name="plus" size={14}/>Add Property</BtnPrimary>}
       </div>
+      {!readOnly && <PropertyDropZone onConfirm={f=>onAdd(f)}/>}
       {properties.length===0 && <div style={{ color:"#4b5563",fontSize:"0.9rem",padding:"2rem 0",textAlign:"center" }}>No properties yet.</div>}
       <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:"1rem" }}>
         {properties.map(p=>{
