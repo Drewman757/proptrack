@@ -35,6 +35,12 @@ async function deleteFile(path) {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const CATEGORIES = ["Lawn Care","Pool Service","House Cleaning","HVAC","Plumbing","Electrical","Pest Control","Roofing","Landscaping","General Repair","Insurance","HOA","Interest","Other"];
+const RECURRING_OPTIONS = [
+  { value:"one-time",  label:"One-Time",  color:"#6b7280" },
+  { value:"monthly",   label:"Monthly",   color:"#8b5cf6" },
+  { value:"quarterly", label:"Quarterly", color:"#0891b2" },
+  { value:"annually",  label:"Annually",  color:"#4a7c59" },
+];
 const US_STATES = ["AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY"];
 const PROPERTY_COLORS = ["#e07b39","#4a7c59","#3b6fa0","#8b5cf6","#d946a8","#e11d48","#0891b2","#b45309"];
 const PROJECT_STATUSES = ["Planning","In Progress","On Hold","Complete"];
@@ -87,7 +93,7 @@ function rowToVendor(r) {
   return { id:r.id, name:r.name, category:r.category, phone:r.phone||"", email:r.email||"", notes:r.notes||"", createdBy:r.created_by };
 }
 function rowToInvoice(r) {
-  return { id:r.id, ownerId:r.owner_id, propertyId:r.property_id||"", vendorId:r.vendor_id||"", projectId:r.project_id||"", category:r.category||CATEGORIES[0], amount:r.amount||"", date:r.date||"", description:r.description||"", fileName:r.file_name||null, fileUrl:r.file_url||null, filePath:r.file_path||null, invoiceNumber:r.invoice_number||null, ownerEmail:r.owner_email, ownerName:r.owner_name };
+  return { id:r.id, ownerId:r.owner_id, propertyId:r.property_id||"", vendorId:r.vendor_id||"", projectId:r.project_id||"", category:r.category||CATEGORIES[0], amount:r.amount||"", date:r.date||"", description:r.description||"", fileName:r.file_name||null, fileUrl:r.file_url||null, filePath:r.file_path||null, invoiceNumber:r.invoice_number||null, recurring:r.recurring||"one-time", ownerEmail:r.owner_email, ownerName:r.owner_name };
 }
 function rowToProject(r) {
   return { id:r.id, ownerId:r.owner_id, propertyId:r.property_id||"", name:r.name, description:r.description||"", status:r.status||"Planning", startDate:r.start_date||"", endDate:r.end_date||"", vendorIds:r.vendor_ids||[], tasks:r.tasks||[], ownerEmail:r.owner_email, ownerName:r.owner_name };
@@ -412,7 +418,7 @@ function InvoiceDropZone({ vendors, properties, projects, onConfirm }) {
     try {
       const result = await parseInvoiceWithAI(f, vendors, properties, projects);
       setParsed(result);
-      setForm({ vendorId:result.vendorId||"", vendorNameRaw:result.vendorNameRaw||"", propertyId:result.propertyId||(properties[0]?.id||""), projectId:result.projectId||"", amount:result.amount!=null?String(result.amount):"", date:result.date||new Date().toISOString().slice(0,10), category:CATEGORIES.includes(result.category)?result.category:CATEGORIES[0], description:result.description||"", invoiceNumber:result.invoiceNumber||"", fileName:f.name });
+      setForm({ vendorId:result.vendorId||"", vendorNameRaw:result.vendorNameRaw||"", propertyId:result.propertyId||(properties[0]?.id||""), projectId:result.projectId||"", amount:result.amount!=null?String(result.amount):"", date:result.date||new Date().toISOString().slice(0,10), category:CATEGORIES.includes(result.category)?result.category:CATEGORIES[0], description:result.description||"", invoiceNumber:result.invoiceNumber||"", fileName:f.name, recurring:"one-time" });
     } catch(e) { setError(e.message||"Failed to parse invoice."); }
     finally { setParsing(false); }
   }
@@ -466,6 +472,16 @@ function InvoiceDropZone({ vendors, properties, projects, onConfirm }) {
               </Grid2>
               <Field label="Category"><select style={inputStyle} value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))}>{CATEGORIES.map(c=><option key={c}>{c}</option>)}</select></Field>
               <Field label="Description"><input style={inputStyle} value={form.description} onChange={e=>setForm(f=>({...f,description:e.target.value}))} placeholder="Brief description"/></Field>
+
+              <SectionDivider label="Billing Type"/>
+              <div style={{ display:"flex",gap:"0.5rem",flexWrap:"wrap",marginBottom:"1rem" }}>
+                {RECURRING_OPTIONS.map(r=>(
+                  <button key={r.value} onClick={()=>setForm(f=>({...f,recurring:r.value}))}
+                    style={{ flex:1,padding:"0.45rem 0.5rem",borderRadius:"7px",border:`1px solid ${form.recurring===r.value?r.color:"#2a2f3d"}`,background:form.recurring===r.value?r.color+"22":"#0d1117",color:form.recurring===r.value?r.color:"#6b7280",cursor:"pointer",fontSize:"0.78rem",fontWeight:form.recurring===r.value?700:400,textAlign:"center",whiteSpace:"nowrap" }}>
+                    {r.value!=="one-time"&&"↻ "}{r.label}
+                  </button>
+                ))}
+              </div>
 
               <SectionDivider label="Assignment"/>
               <Grid2>
@@ -1070,7 +1086,7 @@ function Invoices({ invoices, properties, vendors, projects, viewingAs, isAdmin,
   const [filterCat, setFilterCat] = useState("all");
   const fileRef = useRef();
   const readOnly = !!viewingAs;
-  const blank = { propertyId:properties[0]?.id||"",vendorId:"",category:CATEGORIES[0],amount:"",date:new Date().toISOString().slice(0,10),description:"",fileName:null };
+  const blank = { propertyId:properties[0]?.id||"",vendorId:"",category:CATEGORIES[0],amount:"",date:new Date().toISOString().slice(0,10),description:"",fileName:null,recurring:"one-time" };
   const [form, setForm] = useState(blank);
 
   async function handleSave() {
@@ -1118,6 +1134,7 @@ function Invoices({ invoices, properties, vendors, projects, viewingAs, isAdmin,
           const prop = properties.find(p=>p.id===inv.propertyId);
           const vend = vendors.find(v=>v.id===inv.vendorId);
           const proj = projects.find(p=>p.id===inv.projectId);
+          const rec = RECURRING_OPTIONS.find(r=>r.value===inv.recurring)||RECURRING_OPTIONS[0];
           return (
             <div key={inv.id} onClick={()=>!readOnly&&(setForm({...inv}),setModal(inv))} style={{ display:"flex",alignItems:"center",padding:"0.85rem 1.25rem",borderBottom:"1px solid #1a1f2b",cursor:readOnly?"default":"pointer" }}
               onMouseEnter={e=>!readOnly&&(e.currentTarget.style.background="#1a1f2b")} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
@@ -1126,6 +1143,7 @@ function Invoices({ invoices, properties, vendors, projects, viewingAs, isAdmin,
                 <div style={{ display:"flex",alignItems:"center",gap:"0.5rem",marginBottom:"0.2rem",flexWrap:"wrap" }}>
                   <span style={{ fontSize:"0.88rem",fontWeight:600,color:"#e8eaf0" }}>{vend?.name||"Unknown Vendor"}</span>
                   <span style={{ fontSize:"0.68rem",background:"#1e2430",color:"#6b7280",borderRadius:"4px",padding:"1px 6px" }}>{inv.category}</span>
+                  {inv.recurring&&inv.recurring!=="one-time"&&<span style={{ fontSize:"0.65rem",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em",color:rec.color,background:rec.color+"22",border:`1px solid ${rec.color}44`,borderRadius:"99px",padding:"1px 7px" }}>↻ {rec.label}</span>}
                   {proj&&<span style={{ fontSize:"0.68rem",background:"#3b6fa022",color:"#3b6fa0",border:"1px solid #3b6fa044",borderRadius:"4px",padding:"1px 6px",display:"flex",alignItems:"center",gap:"3px" }}><Icon name="clipboard" size={9}/>{proj.name}</span>}
                   {inv.fileUrl && <a href={inv.fileUrl} target="_blank" rel="noopener noreferrer" onClick={e=>e.stopPropagation()} style={{ fontSize:"0.68rem",color:"#3b6fa0",display:"flex",alignItems:"center",gap:"2px",textDecoration:"none" }}><Icon name="file" size={10}/>View</a>}
                   {isAdmin&&inv.ownerName&&<OwnerTag email={inv.ownerEmail} name={inv.ownerName}/>}
@@ -1150,6 +1168,16 @@ function Invoices({ invoices, properties, vendors, projects, viewingAs, isAdmin,
           </Grid2>
           <Field label="Date"><input style={inputStyle} type="date" value={form.date} onChange={e=>setForm(f=>({...f,date:e.target.value}))}/></Field>
           <Field label="Description"><input style={inputStyle} value={form.description} onChange={e=>setForm(f=>({...f,description:e.target.value}))} placeholder="Brief description…"/></Field>
+          <Field label="Recurring">
+            <div style={{ display:"flex",gap:"0.5rem",flexWrap:"wrap" }}>
+              {RECURRING_OPTIONS.map(r=>(
+                <button key={r.value} onClick={()=>setForm(f=>({...f,recurring:r.value}))}
+                  style={{ flex:1,padding:"0.45rem 0.5rem",borderRadius:"7px",border:`1px solid ${form.recurring===r.value?r.color:"#2a2f3d"}`,background:form.recurring===r.value?r.color+"22":"#0d1117",color:form.recurring===r.value?r.color:"#6b7280",cursor:"pointer",fontSize:"0.78rem",fontWeight:form.recurring===r.value?700:400,textAlign:"center",whiteSpace:"nowrap" }}>
+                  {r.value!=="one-time"&&"↻ "}{r.label}
+                </button>
+              ))}
+            </div>
+          </Field>
           <Field label="Project">
             <select style={inputStyle} value={form.projectId||""} onChange={e=>setForm(f=>({...f,projectId:e.target.value}))}>
               <option value="">— No project —</option>
@@ -1663,11 +1691,11 @@ export default function App() {
   }
 
   async function addInvoice(form) {
-    const { data } = await supabase.from("invoices").insert({ owner_id:session.user.id,property_id:form.propertyId||null,vendor_id:form.vendorId||null,project_id:form.projectId||null,category:form.category,amount:form.amount||null,date:form.date||null,description:form.description,file_name:form.fileName,file_url:form.fileUrl||null,file_path:form.filePath||null,invoice_number:form.invoiceNumber||null }).select().single();
+    const { data } = await supabase.from("invoices").insert({ owner_id:session.user.id,property_id:form.propertyId||null,vendor_id:form.vendorId||null,project_id:form.projectId||null,category:form.category,amount:form.amount||null,date:form.date||null,description:form.description,file_name:form.fileName,file_url:form.fileUrl||null,file_path:form.filePath||null,invoice_number:form.invoiceNumber||null,recurring:form.recurring||"one-time" }).select().single();
     if (data) setInvoices(i=>[...i,rowToInvoice(data)]);
   }
   async function updateInvoice(form) {
-    const { data } = await supabase.from("invoices").update({ property_id:form.propertyId||null,vendor_id:form.vendorId||null,project_id:form.projectId||null,category:form.category,amount:form.amount||null,date:form.date||null,description:form.description }).eq("id",form.id).select().single();
+    const { data } = await supabase.from("invoices").update({ property_id:form.propertyId||null,vendor_id:form.vendorId||null,project_id:form.projectId||null,category:form.category,amount:form.amount||null,date:form.date||null,description:form.description,recurring:form.recurring||"one-time" }).eq("id",form.id).select().single();
     if (data) setInvoices(i=>i.map(x=>x.id===data.id?rowToInvoice(data):x));
   }
   async function deleteInvoice(id) {
