@@ -41,6 +41,12 @@ const PROJECT_STATUSES = ["Planning","In Progress","On Hold","Complete"];
 const PROJECT_STATUS_COLORS = { Planning:"#3b6fa0","In Progress":"#b45309","On Hold":"#6b7280",Complete:"#4a7c59" };
 const TASK_TYPES = ["Demo / Removal","Framing","Plumbing","Electrical","Drywall","Flooring","Painting","Cabinetry","Fixtures","Roofing","Landscaping","Inspection","Other"];
 
+// Generic project templates auto-created per property
+const GENERIC_PROJECT_TEMPLATES = [
+  { name:"Utilities", description:"Recurring utility expenses — electric, water, gas, HOA, internet, trash.", defaultCategory:"HOA", isGeneric:true },
+  { name:"Maintenance Services", description:"Ongoing maintenance — lawn care, pool cleaning, pest control, HVAC, cleaning.", defaultCategory:"Lawn Care", isGeneric:true },
+];
+
 // ─── Utilities ────────────────────────────────────────────────────────────────
 const fmt = n => new Intl.NumberFormat("en-US",{style:"currency",currency:"USD",maximumFractionDigits:0}).format(n||0);
 const uid = () => Math.random().toString(36).slice(2,9);
@@ -311,6 +317,36 @@ function MembersTab({ profiles, currentUser, onRoleChange }) {
 // ─── AI Invoice Parser ────────────────────────────────────────────────────────
 function fileToBase64(file) {
   return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result.split(",")[1]); r.onerror=()=>rej(new Error("Read failed")); r.readAsDataURL(file); });
+}
+
+// ─── AI Vendor Parser ─────────────────────────────────────────────────────────
+async function parseVendorWithAI(file) {
+  const isImage = file.type.startsWith("image/");
+  const isPdf = file.type === "application/pdf";
+  if (!isImage && !isPdf) throw new Error("Only images and PDFs are supported.");
+  const b64 = await fileToBase64(file);
+
+  const prompt = `You are a vendor/contractor information extractor. Extract business contact info from this document (invoice, business card, flyer, screenshot, etc). Return ONLY valid JSON, no markdown.
+
+Valid categories: ${CATEGORIES.join(", ")}
+
+Return this exact JSON:
+{"name":"","category":"Other","phone":"","email":"","notes":"","confidence":"medium"}
+
+- name: business or contractor name (required)
+- category: best matching category from the list
+- phone: phone number if found, else ""
+- email: email if found, else ""
+- notes: website, address, license number, or any other useful info
+- confidence: low | medium | high`;
+
+  const body = { model:"claude-sonnet-4-5", max_tokens:500, messages:[{ role:"user", content:[{ type:isPdf?"document":"image", source:{ type:"base64", media_type:file.type, data:b64 } },{ type:"text", text:prompt }] }] };
+  const edgeFnUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/dynamic-worker`;
+  const resp = await fetch(edgeFnUrl, { method:"POST", headers:{"Content-Type":"application/json","Authorization":`Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`}, body:JSON.stringify(body) });
+  if (!resp.ok) { const errText = await resp.text().catch(()=>""); throw new Error(`API error ${resp.status}${errText?" — "+errText:""}`); }
+  const data = await resp.json();
+  const text = data.content?.map(c=>c.text||"").join("")||"";
+  return JSON.parse(text.replace(/```json|```/g,"").trim());
 }
 
 async function parseInvoiceWithAI(file, vendors, properties, projects) {
@@ -732,6 +768,80 @@ function Tenants({ tenants, properties, viewingAs, onAdd, onUpdate, onDelete }) 
   );
 }
 
+// ─── Vendor AI Drop Zone ──────────────────────────────────────────────────────
+function VendorDropZone({ onConfirm }) {
+  const [dragging, setDragging] = useState(false);
+  const [parsing, setParsing] = useState(false);
+  const [error, setError] = useState(null);
+  const [parsed, setParsed] = useState(null);
+  const [form, setForm] = useState(null);
+  const [previewUrl, setPreviewUrl] = useState(null);
+  const inputRef = useRef();
+  const confidenceColor = { low:"#f87171", medium:"#fbbf24", high:"#4a7c59" };
+
+  async function processFile(f) {
+    if (!f) return;
+    setError(null); setParsed(null); setForm(null);
+    if (f.type.startsWith("image/")) setPreviewUrl(URL.createObjectURL(f)); else setPreviewUrl(null);
+    setParsing(true);
+    try {
+      const result = await parseVendorWithAI(f);
+      setParsed(result);
+      setForm({ name:result.name||"", category:CATEGORIES.includes(result.category)?result.category:CATEGORIES[0], phone:result.phone||"", email:result.email||"", notes:result.notes||"" });
+    } catch(e) { setError(e.message||"Failed to parse vendor info."); }
+    finally { setParsing(false); }
+  }
+
+  function dismiss() { setParsed(null); setForm(null); setPreviewUrl(null); setError(null); }
+
+  return (
+    <>
+      <div onDrop={e=>{e.preventDefault();setDragging(false);const f=e.dataTransfer.files[0];if(f)processFile(f);}} onDragOver={e=>{e.preventDefault();setDragging(true);}} onDragLeave={()=>setDragging(false)} onClick={()=>inputRef.current?.click()}
+        style={{ border:`2px dashed ${dragging?"#e07b39":"#2a2f3d"}`,borderRadius:"12px",padding:"1.25rem",textAlign:"center",cursor:"pointer",background:dragging?"#1c1407":"#0d1117",transition:"all 0.15s",marginBottom:"1.25rem" }}>
+        <input ref={inputRef} type="file" accept=".pdf,.jpg,.jpeg,.png" style={{ display:"none" }} onChange={e=>{const f=e.target.files[0];if(f)processFile(f);e.target.value="";}}/>
+        {parsing ? (
+          <div style={{ color:"#e07b39",fontSize:"0.85rem",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.5rem" }}><Spinner/>Reading vendor info with AI…</div>
+        ) : (
+          <div>
+            <div style={{ color:"#4b5563",marginBottom:"0.25rem" }}><Icon name="upload" size={18}/></div>
+            <div style={{ fontSize:"0.82rem",color:dragging?"#e07b39":"#6b7280",fontWeight:600 }}>{dragging?"Drop file here":"Drag & drop an invoice, business card, or screenshot"}</div>
+            <div style={{ fontSize:"0.7rem",color:"#4b5563",marginTop:"0.2rem" }}>or click to browse · AI extracts vendor name, phone, email, category</div>
+          </div>
+        )}
+      </div>
+      {error && <div style={{ background:"#1c0808",border:"1px solid #5c1f1f",borderRadius:"8px",padding:"0.75rem 1rem",marginBottom:"1rem",fontSize:"0.82rem",color:"#f87171",display:"flex",justifyContent:"space-between",alignItems:"center" }}>{error}<button onClick={()=>setError(null)} style={{ background:"none",border:"none",color:"#f87171",cursor:"pointer",padding:0 }}><Icon name="x" size={13}/></button></div>}
+
+      {form && (
+        <div style={{ position:"fixed",inset:0,background:"rgba(10,12,18,0.85)",zIndex:1200,display:"flex",alignItems:"center",justifyContent:"center",padding:"1rem" }}>
+          <div style={{ background:"#14181f",border:"1px solid #2a2f3d",borderRadius:"14px",width:"100%",maxWidth:"520px",maxHeight:"94vh",overflowY:"auto",boxShadow:"0 24px 64px rgba(0,0,0,0.6)" }}>
+            <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",padding:"1.25rem 1.5rem",borderBottom:"1px solid #1e2430",position:"sticky",top:0,background:"#14181f",zIndex:10 }}>
+              <div>
+                <h3 style={{ margin:0,fontSize:"1rem",fontWeight:700,color:"#e8eaf0" }}>Review Extracted Vendor</h3>
+                <div style={{ fontSize:"0.72rem",color:"#6b7280",marginTop:"2px" }}>AI confidence: <span style={{ color:confidenceColor[parsed?.confidence]||"#6b7280",fontWeight:700,textTransform:"uppercase" }}>{parsed?.confidence||"—"}</span></div>
+              </div>
+              <button onClick={dismiss} style={{ background:"none",border:"none",color:"#6b7280",cursor:"pointer",padding:"4px",display:"flex" }}><Icon name="x" size={18}/></button>
+            </div>
+            <div style={{ padding:"1.5rem" }}>
+              {previewUrl && <div style={{ marginBottom:"1rem",borderRadius:"8px",overflow:"hidden",border:"1px solid #2a2f3d",maxHeight:"140px",display:"flex",alignItems:"center",justifyContent:"center",background:"#0d1117" }}><img src={previewUrl} alt="" style={{ maxHeight:"140px",maxWidth:"100%",objectFit:"contain" }}/></div>}
+              <Field label="Vendor Name"><input style={inputStyle} value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="Business name"/></Field>
+              <Field label="Category"><select style={inputStyle} value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))}>{CATEGORIES.map(c=><option key={c}>{c}</option>)}</select></Field>
+              <Grid2>
+                <Field label="Phone"><input style={inputStyle} value={form.phone} onChange={e=>setForm(f=>({...f,phone:e.target.value}))} placeholder="555-0100"/></Field>
+                <Field label="Email"><input style={inputStyle} value={form.email} onChange={e=>setForm(f=>({...f,email:e.target.value}))} placeholder="email@vendor.com"/></Field>
+              </Grid2>
+              <Field label="Notes"><textarea style={{...inputStyle,resize:"vertical",minHeight:"60px"}} value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))} placeholder="Website, address, license #, etc."/></Field>
+              <div style={{ display:"flex",gap:"0.75rem",justifyContent:"flex-end",marginTop:"0.5rem" }}>
+                <BtnSecondary onClick={dismiss}>Discard</BtnSecondary>
+                <BtnPrimary onClick={()=>{ if(form.name.trim()) { onConfirm(form); dismiss(); } }}><Icon name="check" size={13}/>Save Vendor</BtnPrimary>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 // ─── Vendors (shared) ─────────────────────────────────────────────────────────
 function Vendors({ vendors, isAdmin, invoices, onAdd, onUpdate, onDelete }) {
   const [modal, setModal] = useState(null);
@@ -756,7 +866,10 @@ function Vendors({ vendors, isAdmin, invoices, onAdd, onUpdate, onDelete }) {
         <h2 style={{ margin:0,fontSize:"1.1rem",fontWeight:700,color:"#e8eaf0" }}>Vendors <span style={{ fontSize:"0.7rem",color:"#6b7280",fontWeight:400,fontStyle:"italic" }}>shared across all users</span></h2>
         <BtnPrimary onClick={()=>{setForm(blank);setModal("add");}}><Icon name="plus" size={14}/>Add Vendor</BtnPrimary>
       </div>
-      {!isAdmin && <div style={{ fontSize:"0.75rem",color:"#6b7280",marginBottom:"1.25rem" }}>You can add vendors. Only admins can delete them.</div>}
+      {!isAdmin && <div style={{ fontSize:"0.75rem",color:"#6b7280",marginBottom:"1rem" }}>You can add vendors. Only admins can delete them.</div>}
+
+      <VendorDropZone onConfirm={f=>onAdd(f)}/>
+
       {vendors.length===0 && <div style={{ color:"#4b5563",fontSize:"0.9rem",padding:"2rem 0",textAlign:"center" }}>No vendors yet.</div>}
       {grouped.map(g=>(
         <div key={g.cat} style={{ marginBottom:"1.5rem" }}>
@@ -850,14 +963,16 @@ function Invoices({ invoices, properties, vendors, projects, viewingAs, isAdmin,
         {filtered.map(inv=>{
           const prop = properties.find(p=>p.id===inv.propertyId);
           const vend = vendors.find(v=>v.id===inv.vendorId);
+          const proj = projects.find(p=>p.id===inv.projectId);
           return (
             <div key={inv.id} onClick={()=>!readOnly&&(setForm({...inv}),setModal(inv))} style={{ display:"flex",alignItems:"center",padding:"0.85rem 1.25rem",borderBottom:"1px solid #1a1f2b",cursor:readOnly?"default":"pointer" }}
               onMouseEnter={e=>!readOnly&&(e.currentTarget.style.background="#1a1f2b")} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
               <div style={{ width:"4px",height:"36px",borderRadius:"99px",background:prop?.color||"#6b7280",marginRight:"1rem",flexShrink:0 }}/>
               <div style={{ flex:1,minWidth:0 }}>
-                <div style={{ display:"flex",alignItems:"center",gap:"0.5rem",marginBottom:"0.2rem" }}>
+                <div style={{ display:"flex",alignItems:"center",gap:"0.5rem",marginBottom:"0.2rem",flexWrap:"wrap" }}>
                   <span style={{ fontSize:"0.88rem",fontWeight:600,color:"#e8eaf0" }}>{vend?.name||"Unknown Vendor"}</span>
                   <span style={{ fontSize:"0.68rem",background:"#1e2430",color:"#6b7280",borderRadius:"4px",padding:"1px 6px" }}>{inv.category}</span>
+                  {proj&&<span style={{ fontSize:"0.68rem",background:"#3b6fa022",color:"#3b6fa0",border:"1px solid #3b6fa044",borderRadius:"4px",padding:"1px 6px",display:"flex",alignItems:"center",gap:"3px" }}><Icon name="clipboard" size={9}/>{proj.name}</span>}
                   {inv.fileUrl && <a href={inv.fileUrl} target="_blank" rel="noopener noreferrer" onClick={e=>e.stopPropagation()} style={{ fontSize:"0.68rem",color:"#3b6fa0",display:"flex",alignItems:"center",gap:"2px",textDecoration:"none" }}><Icon name="file" size={10}/>View</a>}
                   {isAdmin&&inv.ownerName&&<OwnerTag email={inv.ownerEmail} name={inv.ownerName}/>}
                 </div>
@@ -881,6 +996,16 @@ function Invoices({ invoices, properties, vendors, projects, viewingAs, isAdmin,
           </Grid2>
           <Field label="Date"><input style={inputStyle} type="date" value={form.date} onChange={e=>setForm(f=>({...f,date:e.target.value}))}/></Field>
           <Field label="Description"><input style={inputStyle} value={form.description} onChange={e=>setForm(f=>({...f,description:e.target.value}))} placeholder="Brief description…"/></Field>
+          <Field label="Project">
+            <select style={inputStyle} value={form.projectId||""} onChange={e=>setForm(f=>({...f,projectId:e.target.value}))}>
+              <option value="">— No project —</option>
+              {projects.filter(p=>!form.propertyId||p.propertyId===form.propertyId).map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+              {form.propertyId&&projects.filter(p=>p.propertyId!==form.propertyId).length>0&&<>
+                <option disabled>── Other properties ──</option>
+                {projects.filter(p=>p.propertyId!==form.propertyId).map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+              </>}
+            </select>
+          </Field>
           <div style={{ display:"flex",gap:"0.75rem",justifyContent:"flex-end" }}>
             {modal!=="add"&&<BtnDanger onClick={()=>handleDelete(modal.id)}><Icon name="trash" size={14}/>Delete</BtnDanger>}
             <button onClick={handleSave} style={{ background:"#e07b39",color:"#fff",border:"none",borderRadius:"8px",padding:"0.5rem 1.25rem",cursor:"pointer",fontSize:"0.85rem",fontWeight:600,marginLeft:"auto" }}>Save Invoice</button>
@@ -892,7 +1017,7 @@ function Invoices({ invoices, properties, vendors, projects, viewingAs, isAdmin,
 }
 
 // ─── Projects (simplified — tasks stored as JSONB) ────────────────────────────
-function Projects({ projects, properties, vendors, invoices, viewingAs, isAdmin, onAdd, onUpdate, onDelete, onAddInvoice }) {
+function Projects({ projects, properties, vendors, invoices, viewingAs, isAdmin, onAdd, onUpdate, onDelete, onAddInvoice, onUpdateInvoice }) {
   const [view, setView] = useState(null);
   const [showModal, setShowModal] = useState(false);
   const [filterStatus, setFilterStatus] = useState("all");
@@ -909,7 +1034,7 @@ function Projects({ projects, properties, vendors, invoices, viewingAs, isAdmin,
   if (view) {
     const project = projects.find(p=>p.id===view);
     if (!project) { setView(null); return null; }
-    return <ProjectDetail project={project} projects={projects} vendors={vendors} properties={properties} invoices={invoices} readOnly={readOnly} isAdmin={isAdmin} onUpdate={onUpdate} onDelete={onDelete} onAddInvoice={onAddInvoice} onBack={()=>setView(null)}/>;
+    return <ProjectDetail project={project} projects={projects} vendors={vendors} properties={properties} invoices={invoices} readOnly={readOnly} isAdmin={isAdmin} onUpdate={onUpdate} onDelete={onDelete} onAddInvoice={onAddInvoice} onUpdateInvoice={onUpdateInvoice} onBack={()=>setView(null)}/>;
   }
 
   const filtered = projects.filter(p=>filterStatus==="all"||p.status===filterStatus);
@@ -999,9 +1124,10 @@ function Projects({ projects, properties, vendors, invoices, viewingAs, isAdmin,
 }
 
 // ─── Project Detail ───────────────────────────────────────────────────────────
-function ProjectDetail({ project, projects, vendors, properties, invoices, readOnly, isAdmin, onUpdate, onDelete, onAddInvoice, onBack }) {
+function ProjectDetail({ project, projects, vendors, properties, invoices, readOnly, isAdmin, onUpdate, onDelete, onAddInvoice, onUpdateInvoice, onBack }) {
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
+  const [movingInvoice, setMovingInvoice] = useState(null);
   const blankTask = { title:"",type:TASK_TYPES[0],vendorId:"",status:"todo",budget:"",actual:"",notes:"",photos:[] };
   const [taskForm, setTaskForm] = useState(blankTask);
   const [lightbox, setLightbox] = useState(null);
@@ -1014,6 +1140,8 @@ function ProjectDetail({ project, projects, vendors, properties, invoices, readO
   const prop = properties.find(p=>p.id===live.propertyId);
   const color = PROJECT_STATUS_COLORS[live.status]||"#6b7280";
   const attachedVendors = (live.vendorIds||[]).map(id=>vendors.find(v=>v.id===id)).filter(Boolean);
+  const projectInvoices = invoices.filter(i=>i.projectId===live.id).sort((a,b)=>new Date(b.date)-new Date(a.date));
+  const invoiceTotal = projectInvoices.reduce((s,i)=>s+Number(i.amount),0);
 
   function saveTasksUpdate(newTasks) { onUpdate({ ...live, tasks:newTasks }); }
   function addTask() {
@@ -1045,7 +1173,7 @@ function ProjectDetail({ project, projects, vendors, properties, invoices, readO
         </div>
         {live.description&&<p style={{ margin:"0 0 1rem",fontSize:"0.85rem",color:"#94a3b8",lineHeight:1.5 }}>{live.description}</p>}
         <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(110px,1fr))",gap:"0.75rem",paddingTop:"0.75rem",borderTop:"1px solid #1e2430" }}>
-          {[{l:"Tasks",v:`${done}/${tasks.length}`,c:"#3b6fa0"},{l:"Budget",v:fmt(totalBudget),c:"#e07b39"},{l:"Actual",v:fmt(totalActual),c:totalActual>totalBudget?"#f87171":"#4a7c59"},{l:"Over/Under",v:(totalBudget-totalActual>=0?"−":"+")+fmt(Math.abs(totalBudget-totalActual)),c:totalActual>totalBudget?"#f87171":"#4a7c59"}].map(x=>(
+          {[{l:"Tasks",v:`${done}/${tasks.length}`,c:"#3b6fa0"},{l:"Budget",v:fmt(totalBudget),c:"#e07b39"},{l:"Actual",v:fmt(totalActual),c:totalActual>totalBudget?"#f87171":"#4a7c59"},{l:"Over/Under",v:(totalBudget-totalActual>=0?"−":"+")+fmt(Math.abs(totalBudget-totalActual)),c:totalActual>totalBudget?"#f87171":"#4a7c59"},{l:"Invoices",v:fmt(invoiceTotal),c:"#8b5cf6"}].map(x=>(
             <div key={x.l}><div style={{ fontSize:"0.62rem",color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:"2px" }}>{x.l}</div><div style={{ fontSize:"1rem",fontWeight:700,color:x.c,fontFamily:"'DM Mono',monospace" }}>{x.v}</div></div>
           ))}
         </div>
@@ -1053,6 +1181,42 @@ function ProjectDetail({ project, projects, vendors, properties, invoices, readO
           <div style={{ fontSize:"0.65rem",color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:"0.4rem" }}>Vendors</div>
           <div style={{ display:"flex",flexWrap:"wrap",gap:"0.4rem" }}>{attachedVendors.map(v=><span key={v.id} style={{ fontSize:"0.75rem",background:"#1e2430",color:"#94a3b8",border:"1px solid #2a2f3d",borderRadius:"6px",padding:"2px 8px" }}>{v.name}</span>)}</div>
         </div>}
+      </div>
+
+      {/* Invoices linked to this project */}
+      <div style={{ marginBottom:"1.5rem" }}>
+        <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"0.75rem" }}>
+          <div style={{ fontSize:"0.72rem",fontWeight:700,color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.07em" }}>Invoices ({projectInvoices.length}) · {fmt(invoiceTotal)}</div>
+        </div>
+        {projectInvoices.length===0 ? (
+          <div style={{ background:"#0d1117",border:"1px dashed #2a2f3d",borderRadius:"10px",padding:"1.25rem",textAlign:"center",color:"#4b5563",fontSize:"0.82rem" }}>No invoices linked to this project. Assign invoices from the Invoices tab.</div>
+        ) : (
+          <div style={{ background:"#14181f",border:"1px solid #1e2430",borderRadius:"10px",overflow:"hidden" }}>
+            {projectInvoices.map((inv,idx)=>{
+              const vend = vendors.find(v=>v.id===inv.vendorId);
+              return (
+                <div key={inv.id} style={{ display:"flex",alignItems:"center",padding:"0.75rem 1.25rem",borderBottom:idx<projectInvoices.length-1?"1px solid #1a1f2b":"none" }}>
+                  <div style={{ flex:1,minWidth:0 }}>
+                    <div style={{ display:"flex",alignItems:"center",gap:"0.5rem",marginBottom:"0.15rem" }}>
+                      <span style={{ fontSize:"0.85rem",fontWeight:600,color:"#e8eaf0" }}>{vend?.name||"Unknown Vendor"}</span>
+                      <span style={{ fontSize:"0.68rem",background:"#1e2430",color:"#6b7280",borderRadius:"4px",padding:"1px 6px" }}>{inv.category}</span>
+                      {inv.fileUrl&&<a href={inv.fileUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize:"0.68rem",color:"#3b6fa0",display:"flex",alignItems:"center",gap:"2px",textDecoration:"none" }}><Icon name="file" size={10}/>View</a>}
+                    </div>
+                    <div style={{ fontSize:"0.72rem",color:"#6b7280" }}>{inv.date}{inv.description?" · "+inv.description:""}</div>
+                  </div>
+                  <div style={{ display:"flex",alignItems:"center",gap:"0.75rem",marginLeft:"1rem" }}>
+                    <span style={{ fontFamily:"'DM Mono',monospace",fontSize:"0.95rem",fontWeight:700,color:"#e8eaf0" }}>{fmt(inv.amount)}</span>
+                    {!readOnly&&onUpdateInvoice&&(
+                      <button onClick={()=>setMovingInvoice(inv)} style={{ fontSize:"0.7rem",padding:"3px 8px",borderRadius:"5px",border:"1px solid #2a2f3d",background:"#1e2430",color:"#6b7280",cursor:"pointer",display:"flex",alignItems:"center",gap:"3px",whiteSpace:"nowrap" }}>
+                        <Icon name="arrowLeft" size={10}/>Move
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1rem" }}>
@@ -1120,6 +1284,27 @@ function ProjectDetail({ project, projects, vendors, properties, invoices, readO
             <BtnDanger onClick={async()=>{ if(!confirm("Delete project?"))return; await onDelete(live.id); setShowEditModal(false); onBack(); }}><Icon name="trash" size={13}/>Delete</BtnDanger>
             <BtnSecondary onClick={()=>setShowEditModal(false)}>Done</BtnSecondary>
           </div>
+        </Modal>
+      )}
+
+      {/* Move Invoice modal */}
+      {movingInvoice&&!readOnly&&onUpdateInvoice&&(
+        <Modal title="Move Invoice to Project" onClose={()=>setMovingInvoice(null)}>
+          <div style={{ marginBottom:"1rem",background:"#0d1117",border:"1px solid #1e2430",borderRadius:"8px",padding:"0.75rem 1rem" }}>
+            <div style={{ fontSize:"0.85rem",fontWeight:600,color:"#e8eaf0" }}>{vendors.find(v=>v.id===movingInvoice.vendorId)?.name||"Invoice"}</div>
+            <div style={{ fontSize:"0.75rem",color:"#6b7280" }}>{movingInvoice.date} · {fmt(movingInvoice.amount)}</div>
+          </div>
+          <Field label="Move to Project">
+            <select style={inputStyle} defaultValue={movingInvoice.projectId||""}
+              onChange={async e=>{
+                await onUpdateInvoice({...movingInvoice, projectId:e.target.value||""});
+                setMovingInvoice(null);
+              }}>
+              <option value="">— Remove from project —</option>
+              {projects.map(p=><option key={p.id} value={p.id}>{p.name}{p.id===live.id?" (current)":""}</option>)}
+            </select>
+          </Field>
+          <div style={{ fontSize:"0.75rem",color:"#6b7280",marginTop:"-0.5rem" }}>Selecting a project moves the invoice immediately.</div>
         </Modal>
       )}
     </div>
@@ -1277,7 +1462,16 @@ export default function App() {
   // ── CRUD helpers ─────────────────────────────────────────────
   async function addProperty(form) {
     const { data } = await supabase.from("properties").insert({ name:form.name,address:form.address,city:form.city,state:form.state,color:form.color,owner_id:session.user.id }).select().single();
-    if (data) setProperties(p=>[...p,rowToProperty(data)]);
+    if (data) {
+      setProperties(p=>[...p,rowToProperty(data)]);
+      // Auto-create generic projects for this property
+      const genericProjects = await Promise.all(GENERIC_PROJECT_TEMPLATES.map(async t=>{
+        const { data:pd } = await supabase.from("projects").insert({ owner_id:session.user.id,property_id:data.id,name:t.name,description:t.description,status:"In Progress",start_date:new Date().toISOString().slice(0,10),end_date:null,vendor_ids:[],tasks:[] }).select().single();
+        return pd ? rowToProject(pd) : null;
+      }));
+      const valid = genericProjects.filter(Boolean);
+      if (valid.length) setProjects(p=>[...p,...valid]);
+    }
   }
   async function updateProperty(form) {
     const { data } = await supabase.from("properties").update({ name:form.name,address:form.address,city:form.city,state:form.state,color:form.color }).eq("id",form.id).select().single();
@@ -1418,7 +1612,7 @@ export default function App() {
           {tab==="tenants"     && <Tenants tenants={tenants} properties={properties} viewingAs={viewingAs} onAdd={addTenant} onUpdate={updateTenant} onDelete={deleteTenant}/>}
           {tab==="vendors"     && <Vendors vendors={vendors} isAdmin={isAdmin} invoices={invoices} onAdd={addVendor} onUpdate={updateVendor} onDelete={deleteVendor}/>}
           {tab==="invoices"    && <Invoices invoices={invoices} properties={properties} vendors={vendors} projects={projects} viewingAs={viewingAs} isAdmin={isAdmin} onAdd={addInvoice} onUpdate={updateInvoice} onDelete={deleteInvoice}/>}
-          {tab==="projects"    && <Projects projects={projects} properties={properties} vendors={vendors} invoices={invoices} viewingAs={viewingAs} isAdmin={isAdmin} onAdd={addProject} onUpdate={updateProject} onDelete={deleteProject} onAddInvoice={addInvoice}/>}
+          {tab==="projects"    && <Projects projects={projects} properties={properties} vendors={vendors} invoices={invoices} viewingAs={viewingAs} isAdmin={isAdmin} onAdd={addProject} onUpdate={updateProject} onDelete={deleteProject} onAddInvoice={addInvoice} onUpdateInvoice={updateInvoice}/>}
           {tab==="members"     && isAdmin && <MembersTab profiles={profiles} currentUser={profile} onRoleChange={handleRoleChange}/>}
         </div>
 
