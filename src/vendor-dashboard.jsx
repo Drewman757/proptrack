@@ -34,7 +34,7 @@ async function deleteFile(path) {
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-const CATEGORIES = ["Lawn Care","Pool Service","House Cleaning","HVAC","Plumbing","Electrical","Pest Control","Roofing","Landscaping","General Repair","Insurance","HOA","Interest","Other"];
+const CATEGORIES = ["Lawn Care","Pool Service","House Cleaning","HVAC","Plumbing","Electrical","Pest Control","Roofing","Landscaping","General Repair","Insurance","HOA","Taxes","Interest","Other"];
 const RECURRING_OPTIONS = [
   { value:"one-time",  label:"One-Time",  color:"#6b7280" },
   { value:"monthly",   label:"Monthly",   color:"#8b5cf6" },
@@ -49,8 +49,8 @@ const TASK_TYPES = ["Demo / Removal","Framing","Plumbing","Electrical","Drywall"
 
 // Generic project templates auto-created per property
 const GENERIC_PROJECT_TEMPLATES = [
-  { name:"Utilities", description:"Recurring utility expenses — electric, water, gas, HOA, internet, trash.", defaultCategory:"HOA", isGeneric:true },
-  { name:"Maintenance Services", description:"Ongoing maintenance — lawn care, pool cleaning, pest control, HVAC, cleaning.", defaultCategory:"Lawn Care", isGeneric:true },
+  { name:"Utilities", description:"Recurring utility expenses — electric, water, gas, internet, trash.", defaultCategory:"Other", isGeneric:true },
+  { name:"HOA / Taxes / Insurance", description:"HOA fees, property taxes, and insurance premiums.", defaultCategory:"HOA", isGeneric:true },
 ];
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
