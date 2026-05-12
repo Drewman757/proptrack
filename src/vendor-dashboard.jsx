@@ -494,7 +494,7 @@ function InvoiceDropZone({ vendors, properties, projects, onConfirm }) {
                 <Field label="Project (optional)">
                   <select style={inputStyle} value={form.projectId} onChange={e=>setForm(f=>({...f,projectId:e.target.value}))}>
                     <option value="">— None —</option>
-                    {projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+                    {projects.map(p=>{const prop=properties.find(x=>x.id===p.propertyId);return <option key={p.id} value={p.id}>{p.name}{prop?` — ${prop.name}`:""}</option>;})}
                   </select>
                 </Field>
               </Grid2>
@@ -2133,10 +2133,16 @@ function Invoices({ invoices, properties, vendors, projects, viewingAs, isAdmin,
           <Field label="Project">
             <select style={inputStyle} value={form.projectId||""} onChange={e=>setForm(f=>({...f,projectId:e.target.value}))}>
               <option value="">— No project —</option>
-              {projects.filter(p=>!form.propertyId||p.propertyId===form.propertyId).map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+              {projects.filter(p=>!form.propertyId||p.propertyId===form.propertyId).map(p=>{
+                const prop=properties.find(x=>x.id===p.propertyId);
+                return <option key={p.id} value={p.id}>{p.name}{prop?` — ${prop.name}`:""}</option>;
+              })}
               {form.propertyId&&projects.filter(p=>p.propertyId!==form.propertyId).length>0&&<>
                 <option disabled>── Other properties ──</option>
-                {projects.filter(p=>p.propertyId!==form.propertyId).map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+                {projects.filter(p=>p.propertyId!==form.propertyId).map(p=>{
+                  const prop=properties.find(x=>x.id===p.propertyId);
+                  return <option key={p.id} value={p.id}>{p.name}{prop?` — ${prop.name}`:""}</option>;
+                })}
               </>}
             </select>
           </Field>
