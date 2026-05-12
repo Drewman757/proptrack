@@ -2056,6 +2056,38 @@ export default function App() {
 
   useEffect(()=>{ loadData(); },[loadData]);
 
+  // ── Backfill template projects for existing properties ───────
+  useEffect(()=>{
+    if (!session?.user?.id || properties.length===0 || projects===undefined) return;
+    async function backfill() {
+      const toCreate = [];
+      for (const prop of properties) {
+        for (const tmpl of GENERIC_PROJECT_TEMPLATES) {
+          const already = projects.some(p=>p.propertyId===prop.id && p.name===tmpl.name);
+          if (!already) toCreate.push({ prop, tmpl });
+        }
+      }
+      if (toCreate.length===0) return;
+      const created = await Promise.all(toCreate.map(async ({ prop, tmpl })=>{
+        const { data } = await supabase.from("projects").insert({
+          owner_id: prop.ownerId || session.user.id,
+          property_id: prop.id,
+          name: tmpl.name,
+          description: tmpl.description,
+          status: "In Progress",
+          start_date: new Date().toISOString().slice(0,10),
+          end_date: null,
+          vendor_ids: [],
+          tasks: []
+        }).select().single();
+        return data ? rowToProject(data) : null;
+      }));
+      const valid = created.filter(Boolean);
+      if (valid.length) setProjects(p=>[...p,...valid]);
+    }
+    backfill();
+  },[properties.length, projects.length, session?.user?.id]); // eslint-disable-line
+
   // ── CRUD helpers ─────────────────────────────────────────────
   async function addProperty(form) {
     const { data } = await supabase.from("properties").insert({ name:form.name,address:form.address,city:form.city,state:form.state,color:form.color,owner_id:session.user.id }).select().single();
