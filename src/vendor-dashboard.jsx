@@ -2315,28 +2315,26 @@ function Projects({ projects, properties, vendors, invoices, viewingAs, isAdmin,
       {filtered.length===0 && <div style={{ background:"#14181f",border:"1px dashed #2a2f3d",borderRadius:"12px",padding:"3rem",textAlign:"center",color:"#4b5563",fontSize:"0.9rem" }}>{projects.length===0?"No projects yet.":"No projects match this filter."}</div>}
 
       {filtered.length>0&&(()=>{
-        function ProjectCard({p}) {
-          const prop = properties.find(pr=>pr.id===p.propertyId);
+        function ProjectCard({p,hidePropName}) {
           const tasks = p.tasks||[]; const done = tasks.filter(t=>t.status==="done").length;
           const pct = tasks.length>0?Math.round((done/tasks.length)*100):0;
           const color = PROJECT_STATUS_COLORS[p.status]||"#6b7280";
           const budget = tasks.reduce((s,t)=>s+Number(t.budget||0),0);
           const actual = tasks.reduce((s,t)=>s+Number(t.actual||0),0);
           return (
-            <div key={p.id} onClick={()=>setView(p.id)} style={{ background:"#14181f",border:"1px solid #1e2430",borderRadius:"12px",padding:"1.25rem",cursor:"pointer",borderTop:`3px solid ${color}`,marginBottom:"0.75rem" }}>
-              <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"0.5rem" }}>
-                <div style={{ fontWeight:700,fontSize:"0.98rem",color:"#e8eaf0",flex:1,paddingRight:"0.5rem" }}>{p.name}</div>
+            <div onClick={()=>setView(p.id)} style={{ background:"#14181f",border:"1px solid #1e2430",borderRadius:"12px",padding:"1.1rem",cursor:"pointer",borderTop:`3px solid ${color}` }}>
+              <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"0.4rem" }}>
+                <div style={{ fontWeight:700,fontSize:"0.92rem",color:"#e8eaf0",flex:1,paddingRight:"0.5rem" }}>{p.name}</div>
                 <Badge color={color} label={p.status}/>
               </div>
-              {prop&&<div style={{ fontSize:"0.72rem",color:"#6b7280",marginBottom:"0.6rem",display:"flex",alignItems:"center",gap:"4px" }}><span style={{ width:"6px",height:"6px",borderRadius:"50%",background:prop.color,display:"inline-block" }}/>{prop.name}</div>}
-              {p.description&&<p style={{ margin:"0 0 0.75rem",fontSize:"0.78rem",color:"#6b7280",lineHeight:1.4 }}>{p.description}</p>}
-              {tasks.length>0&&<div style={{ marginBottom:"0.75rem" }}>
-                <div style={{ display:"flex",justifyContent:"space-between",fontSize:"0.68rem",color:"#6b7280",marginBottom:"4px" }}><span>{done}/{tasks.length} tasks</span><span>{pct}%</span></div>
+              {p.description&&<p style={{ margin:"0 0 0.6rem",fontSize:"0.76rem",color:"#6b7280",lineHeight:1.4 }}>{p.description}</p>}
+              {tasks.length>0&&<div style={{ marginBottom:"0.6rem" }}>
+                <div style={{ display:"flex",justifyContent:"space-between",fontSize:"0.68rem",color:"#6b7280",marginBottom:"3px" }}><span>{done}/{tasks.length} tasks</span><span>{pct}%</span></div>
                 <div style={{ height:"4px",background:"#1e2430",borderRadius:"99px",overflow:"hidden" }}><div style={{ height:"100%",width:`${pct}%`,background:pct===100?"#4a7c59":"#e07b39",borderRadius:"99px" }}/></div>
               </div>}
               {(budget>0||actual>0)&&<div style={{ display:"flex",gap:"1rem" }}>
-                {budget>0&&<div><div style={{ fontSize:"0.62rem",color:"#6b7280",textTransform:"uppercase" }}>Budget</div><div style={{ fontSize:"0.88rem",fontWeight:600,color:"#e07b39",fontFamily:"'DM Mono',monospace" }}>{fmt(budget)}</div></div>}
-                {actual>0&&<div><div style={{ fontSize:"0.62rem",color:"#6b7280",textTransform:"uppercase" }}>Actual</div><div style={{ fontSize:"0.88rem",fontWeight:600,color:actual>budget?"#f87171":"#4a7c59",fontFamily:"'DM Mono',monospace" }}>{fmt(actual)}</div></div>}
+                {budget>0&&<div><div style={{ fontSize:"0.6rem",color:"#6b7280",textTransform:"uppercase" }}>Budget</div><div style={{ fontSize:"0.85rem",fontWeight:600,color:"#e07b39",fontFamily:"'DM Mono',monospace" }}>{fmt(budget)}</div></div>}
+                {actual>0&&<div><div style={{ fontSize:"0.6rem",color:"#6b7280",textTransform:"uppercase" }}>Actual</div><div style={{ fontSize:"0.85rem",fontWeight:600,color:actual>budget?"#f87171":"#4a7c59",fontFamily:"'DM Mono',monospace" }}>{fmt(actual)}</div></div>}
               </div>}
               {isAdmin&&p.ownerName&&<div style={{ marginTop:"0.5rem" }}><OwnerTag email={p.ownerEmail} name={p.ownerName}/></div>}
             </div>
@@ -2344,37 +2342,77 @@ function Projects({ projects, properties, vendors, invoices, viewingAs, isAdmin,
         }
         const isUtilities = p => /utilit/i.test(p.name);
         const isHOA = p => /hoa|tax|insurance/i.test(p.name);
-        const isMaint = p => !isUtilities(p) && !isHOA(p) && !/remodel|renovati|addition|construc/i.test(p.name);
         const isRemodel = p => /remodel|renovati|addition|construc/i.test(p.name);
-        const col1 = filtered.filter(isUtilities);
-        const col2 = filtered.filter(isMaint);
-        const col3 = filtered.filter(isHOA);
-        const col4 = filtered.filter(isRemodel);
-        const ColHeader = ({label,accent}) => (
-          <div style={{ fontSize:"0.65rem",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.08em",color:accent,borderBottom:`1px solid ${accent}33`,paddingBottom:"0.4rem",marginBottom:"0.75rem" }}>{label}</div>
-        );
+        const isMaint = p => !isUtilities(p) && !isHOA(p) && !isRemodel(p);
+
+        // Get all unique properties that have at least one filtered project, sorted A-Z
+        const propIds = [...new Set(filtered.map(p=>p.propertyId))];
+        const propRows = propIds
+          .map(id=>properties.find(pr=>pr.id===id))
+          .filter(Boolean)
+          .sort((a,b)=>a.name.localeCompare(b.name));
+
+        // Remodel projects (span full width at bottom, sorted by property name)
+        const remodelProjects = filtered.filter(isRemodel).sort((a,b)=>{
+          const pa=properties.find(p=>p.id===a.propertyId)?.name||"";
+          const pb=properties.find(p=>p.id===b.propertyId)?.name||"";
+          return pa.localeCompare(pb);
+        });
+
+        const colHeaderStyle = (accent) => ({
+          fontSize:"0.6rem",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.08em",
+          color:accent,paddingBottom:"0.35rem",marginBottom:"0.5rem",borderBottom:`1px solid ${accent}33`
+        });
+
         return (
-          <div style={{ display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:"1rem",alignItems:"start" }}>
-            <div>
-              <ColHeader label="Utilities" accent="#0891b2"/>
-              {col1.map(p=><ProjectCard key={p.id} p={p}/>)}
-              {col1.length===0&&<div style={{ fontSize:"0.78rem",color:"#374151",fontStyle:"italic" }}>None</div>}
+          <div>
+            {/* Column headers — sticky label row */}
+            <div style={{ display:"grid",gridTemplateColumns:"180px 1fr 1fr 1fr",gap:"0.75rem",marginBottom:"0.5rem",alignItems:"end" }}>
+              <div/>
+              <div style={colHeaderStyle("#0891b2")}>Utilities</div>
+              <div style={colHeaderStyle("#e07b39")}>Maintenance</div>
+              <div style={colHeaderStyle("#4a7c59")}>HOA / Taxes / Insurance</div>
             </div>
-            <div>
-              <ColHeader label="Maintenance" accent="#e07b39"/>
-              {col2.map(p=><ProjectCard key={p.id} p={p}/>)}
-              {col2.length===0&&<div style={{ fontSize:"0.78rem",color:"#374151",fontStyle:"italic" }}>None</div>}
+
+            {/* One row per property, A-Z */}
+            <div style={{ display:"flex",flexDirection:"column",gap:"0.75rem" }}>
+              {propRows.map(prop=>{
+                const propProjects = filtered.filter(p=>p.propertyId===prop.id);
+                const utils = propProjects.filter(isUtilities);
+                const maint = propProjects.filter(isMaint);
+                const hoa   = propProjects.filter(isHOA);
+                // skip remodel here — shown below
+                if(utils.length===0&&maint.length===0&&hoa.length===0) return null;
+                return (
+                  <div key={prop.id} style={{ display:"grid",gridTemplateColumns:"180px 1fr 1fr 1fr",gap:"0.75rem",alignItems:"start" }}>
+                    {/* Property label */}
+                    <div style={{ display:"flex",alignItems:"center",gap:"6px",paddingTop:"0.85rem" }}>
+                      <span style={{ width:"8px",height:"8px",borderRadius:"50%",background:prop.color,flexShrink:0 }}/>
+                      <span style={{ fontSize:"0.82rem",fontWeight:700,color:"#e8eaf0" }}>{prop.name}</span>
+                    </div>
+                    {/* Utilities */}
+                    <div style={{ display:"flex",flexDirection:"column",gap:"0.5rem" }}>
+                      {utils.length>0?utils.map(p=><ProjectCard key={p.id} p={p} hidePropName/>):<div style={{ fontSize:"0.75rem",color:"#2a2f3d",fontStyle:"italic",paddingTop:"0.85rem" }}>—</div>}
+                    </div>
+                    {/* Maintenance */}
+                    <div style={{ display:"flex",flexDirection:"column",gap:"0.5rem" }}>
+                      {maint.length>0?maint.map(p=><ProjectCard key={p.id} p={p} hidePropName/>):<div style={{ fontSize:"0.75rem",color:"#2a2f3d",fontStyle:"italic",paddingTop:"0.85rem" }}>—</div>}
+                    </div>
+                    {/* HOA */}
+                    <div style={{ display:"flex",flexDirection:"column",gap:"0.5rem" }}>
+                      {hoa.length>0?hoa.map(p=><ProjectCard key={p.id} p={p} hidePropName/>):<div style={{ fontSize:"0.75rem",color:"#2a2f3d",fontStyle:"italic",paddingTop:"0.85rem" }}>—</div>}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
-            <div>
-              <ColHeader label="HOA / Taxes / Insurance" accent="#4a7c59"/>
-              {col3.map(p=><ProjectCard key={p.id} p={p}/>)}
-              {col3.length===0&&<div style={{ fontSize:"0.78rem",color:"#374151",fontStyle:"italic" }}>None</div>}
-            </div>
-            {col4.length>0&&(
-              <div style={{ gridColumn:"1/-1" }}>
-                <ColHeader label="Remodeling & Renovations" accent="#8b5cf6"/>
-                <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:"0.75rem" }}>
-                  {col4.map(p=><ProjectCard key={p.id} p={p}/>)}
+
+            {/* Remodeling section full-width at bottom */}
+            {remodelProjects.length>0&&(
+              <div style={{ marginTop:"1.5rem" }}>
+                <div style={colHeaderStyle("#8b5cf6")}>Remodeling &amp; Renovations</div>
+                <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:"0.75rem" }}>
+                  {remodelProjects.map(p=><ProjectCard key={p.id} p={p}/>)}
                 </div>
               </div>
             )}
