@@ -1014,6 +1014,10 @@ function PropertyDetail({ property, invoices, tenants, projects, vendors, isAdmi
       {/* Overview — tenants */}
       {activeSection==="overview" && (
         <div>
+          {/* Spend vs Income trend */}
+          <ChartCard title="Monthly Expenses vs. Income — Last 12 Months" style={{ marginBottom:"1.25rem" }}>
+            <SparkLine invoices={propInvoices} tenants={propTenants} months={12} height={100}/>
+          </ChartCard>
           <div style={{ fontSize:"0.72rem",fontWeight:700,color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:"0.75rem" }}>Tenants</div>
           {propTenants.length===0 ? (
             <div style={{ background:"#14181f",border:"1px dashed #2a2f3d",borderRadius:"10px",padding:"2rem",textAlign:"center",color:"#4b5563",fontSize:"0.85rem" }}>No tenants at this property.</div>
