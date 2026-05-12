@@ -744,24 +744,264 @@ function PropertyDropZone({ onConfirm }) {
   );
 }
 
+// ─── Property Detail View ─────────────────────────────────────────────────────
+function PropertyDetail({ property, invoices, tenants, projects, vendors, isAdmin, onUpdate, onDelete, onBack }) {
+  const [editModal, setEditModal] = useState(false);
+  const [form, setForm] = useState({...property});
+  const [activeSection, setActiveSection] = useState("overview");
+
+  const propInvoices = invoices.filter(i=>i.propertyId===property.id).sort((a,b)=>new Date(b.date)-new Date(a.date));
+  const propProjects = projects.filter(p=>p.propertyId===property.id);
+  const propTenants = tenants.filter(t=>t.propertyId===property.id);
+  const totalSpent = propInvoices.reduce((s,i)=>s+Number(i.amount),0);
+  const leaseIncome = propTenants.filter(t=>leaseStatus(t.leaseStart,t.leaseEnd)==="active").reduce((s,t)=>s+leaseTotalRent(t),0);
+
+  // Unique vendors used for this property
+  const vendorIds = [...new Set(propInvoices.filter(i=>i.vendorId).map(i=>i.vendorId))];
+  const propVendors = vendorIds.map(id=>vendors.find(v=>v.id===id)).filter(Boolean);
+
+  async function handleSave() {
+    if (!form.name.trim()) return;
+    await onUpdate({...form,id:property.id});
+    setEditModal(false);
+  }
+  async function handleDelete() {
+    if (!confirm("Delete this property?")) return;
+    await onDelete(property.id);
+    onBack();
+  }
+
+  const sections = [
+    { id:"overview", label:"Overview" },
+    { id:"invoices", label:`Invoices (${propInvoices.length})` },
+    { id:"projects", label:`Projects (${propProjects.length})` },
+    { id:"vendors", label:`Vendors (${propVendors.length})` },
+  ];
+
+  return (
+    <div>
+      <button onClick={onBack} style={{ display:"flex",alignItems:"center",gap:"6px",background:"none",border:"none",color:"#6b7280",cursor:"pointer",fontSize:"0.83rem",marginBottom:"1.25rem",padding:0 }}>
+        <Icon name="arrowLeft" size={14}/>Back to Properties
+      </button>
+
+      {/* Header */}
+      <div style={{ background:"#14181f",border:"1px solid #1e2430",borderRadius:"14px",padding:"1.5rem",marginBottom:"1.25rem",borderTop:`3px solid ${property.color}` }}>
+        <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:"0.75rem",marginBottom:"1rem" }}>
+          <div>
+            <h2 style={{ margin:"0 0 0.2rem",fontSize:"1.2rem",fontWeight:700,color:"#e8eaf0" }}>{property.name}</h2>
+            <div style={{ fontSize:"0.82rem",color:"#6b7280" }}>{property.address && `${property.address}, `}{property.city}, {property.state}</div>
+          </div>
+          <BtnSecondary onClick={()=>{ setForm({...property}); setEditModal(true); }}><Icon name="wrench" size={13}/>Edit</BtnSecondary>
+        </div>
+        <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(110px,1fr))",gap:"0.75rem" }}>
+          {[
+            {l:"Total Expenses",v:fmt(totalSpent),c:"#e07b39"},
+            {l:"Lease Income",v:fmt(leaseIncome),c:"#4a7c59"},
+            {l:"Net",v:fmt(leaseIncome-totalSpent),c:leaseIncome-totalSpent>=0?"#4a7c59":"#e07b39"},
+            {l:"Tenants",v:propTenants.length,c:"#3b6fa0"},
+            {l:"Projects",v:propProjects.length,c:"#8b5cf6"},
+          ].map(x=>(
+            <div key={x.l}><div style={{ fontSize:"0.62rem",color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:"2px" }}>{x.l}</div><div style={{ fontSize:"1rem",fontWeight:700,color:x.c,fontFamily:"'DM Mono',monospace" }}>{x.v}</div></div>
+          ))}
+        </div>
+      </div>
+
+      {/* Section tabs */}
+      <div style={{ display:"flex",gap:"0.25rem",marginBottom:"1.25rem",background:"#0d1117",borderRadius:"10px",padding:"4px",border:"1px solid #1e2430" }}>
+        {sections.map(s=>(
+          <button key={s.id} onClick={()=>setActiveSection(s.id)} style={{ flex:1,padding:"0.45rem 0.5rem",borderRadius:"7px",border:"none",background:activeSection===s.id?"#14181f":"transparent",color:activeSection===s.id?"#e8eaf0":"#6b7280",cursor:"pointer",fontSize:"0.78rem",fontWeight:activeSection===s.id?600:400,textAlign:"center" }}>{s.label}</button>
+        ))}
+      </div>
+
+      {/* Overview — tenants */}
+      {activeSection==="overview" && (
+        <div>
+          <div style={{ fontSize:"0.72rem",fontWeight:700,color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:"0.75rem" }}>Tenants</div>
+          {propTenants.length===0 ? (
+            <div style={{ background:"#14181f",border:"1px dashed #2a2f3d",borderRadius:"10px",padding:"2rem",textAlign:"center",color:"#4b5563",fontSize:"0.85rem" }}>No tenants at this property.</div>
+          ) : (
+            <div style={{ display:"flex",flexDirection:"column",gap:"0.6rem" }}>
+              {propTenants.map(t=>{
+                const status = leaseStatus(t.leaseStart,t.leaseEnd);
+                return (
+                  <div key={t.id} style={{ background:"#14181f",border:"1px solid #1e2430",borderRadius:"10px",padding:"1rem 1.25rem",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:"0.5rem" }}>
+                    <div>
+                      <div style={{ fontWeight:600,color:"#e8eaf0",fontSize:"0.9rem",display:"flex",alignItems:"center",gap:"0.5rem" }}>{t.name}{t.unit&&<span style={{ fontSize:"0.72rem",color:"#6b7280" }}>Unit {t.unit}</span>}</div>
+                      {t.leaseStart&&t.leaseEnd&&<div style={{ fontSize:"0.72rem",color:"#6b7280",marginTop:"2px" }}>{t.leaseStart} → {t.leaseEnd}</div>}
+                    </div>
+                    <div style={{ display:"flex",alignItems:"center",gap:"0.75rem" }}>
+                      <div style={{ textAlign:"right" }}>
+                        <div style={{ fontSize:"0.62rem",color:"#6b7280",textTransform:"uppercase" }}>Monthly Rent</div>
+                        <div style={{ fontFamily:"'DM Mono',monospace",fontSize:"0.95rem",fontWeight:700,color:"#4a7c59" }}>{fmt(t.monthlyRent)}</div>
+                      </div>
+                      <Badge color={leaseColor(status)} label={leaseLabel(status)}/>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {/* Expenses by category */}
+          {propInvoices.length>0 && (
+            <div style={{ marginTop:"1.5rem" }}>
+              <div style={{ fontSize:"0.72rem",fontWeight:700,color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:"0.75rem" }}>Expenses by Category</div>
+              <div style={{ background:"#14181f",border:"1px solid #1e2430",borderRadius:"10px",overflow:"hidden" }}>
+                {CATEGORIES.map(cat=>{ const total=propInvoices.filter(i=>i.category===cat).reduce((s,i)=>s+Number(i.amount),0); if(!total) return null; return (
+                  <div key={cat} style={{ display:"flex",justifyContent:"space-between",alignItems:"center",padding:"0.6rem 1.25rem",borderBottom:"1px solid #1a1f2b" }}>
+                    <span style={{ fontSize:"0.82rem",color:"#94a3b8" }}>{cat}</span>
+                    <span style={{ fontFamily:"'DM Mono',monospace",fontSize:"0.85rem",fontWeight:600,color:"#e8eaf0" }}>{fmt(total)}</span>
+                  </div>
+                ); })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Invoices */}
+      {activeSection==="invoices" && (
+        <div>
+          {propInvoices.length===0 ? (
+            <div style={{ background:"#14181f",border:"1px dashed #2a2f3d",borderRadius:"10px",padding:"2.5rem",textAlign:"center",color:"#4b5563",fontSize:"0.85rem" }}>No invoices for this property yet.</div>
+          ) : (
+            <div style={{ background:"#14181f",border:"1px solid #1e2430",borderRadius:"12px",overflow:"hidden" }}>
+              <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",padding:"0.75rem 1.25rem",borderBottom:"1px solid #1e2430",background:"#0d1117" }}>
+                <span style={{ fontSize:"0.75rem",color:"#6b7280",fontWeight:600,textTransform:"uppercase" }}>{propInvoices.length} records</span>
+                <span style={{ fontFamily:"'DM Mono',monospace",fontSize:"0.9rem",fontWeight:700,color:"#e07b39" }}>{fmt(totalSpent)}</span>
+              </div>
+              {propInvoices.map((inv,idx)=>{
+                const vend = vendors.find(v=>v.id===inv.vendorId);
+                const proj = projects.find(p=>p.id===inv.projectId);
+                const rec = RECURRING_OPTIONS.find(r=>r.value===inv.recurring)||RECURRING_OPTIONS[0];
+                return (
+                  <div key={inv.id} style={{ display:"flex",alignItems:"center",padding:"0.85rem 1.25rem",borderBottom:idx<propInvoices.length-1?"1px solid #1a1f2b":"none" }}>
+                    <div style={{ flex:1,minWidth:0 }}>
+                      <div style={{ display:"flex",alignItems:"center",gap:"0.5rem",marginBottom:"0.2rem",flexWrap:"wrap" }}>
+                        <span style={{ fontSize:"0.88rem",fontWeight:600,color:"#e8eaf0" }}>{vend?.name||"Unknown Vendor"}</span>
+                        {inv.invoiceNumber&&<span style={{ fontSize:"0.72rem",color:"#6b7280",fontFamily:"'DM Mono',monospace" }}>#{inv.invoiceNumber}</span>}
+                        <span style={{ fontSize:"0.68rem",background:"#1e2430",color:"#6b7280",borderRadius:"4px",padding:"1px 6px" }}>{inv.category}</span>
+                        {inv.recurring&&inv.recurring!=="one-time"&&<span style={{ fontSize:"0.65rem",fontWeight:700,textTransform:"uppercase",color:rec.color,background:rec.color+"22",border:`1px solid ${rec.color}44`,borderRadius:"99px",padding:"1px 7px" }}>↻ {rec.label}</span>}
+                        {proj&&<span style={{ fontSize:"0.68rem",background:"#3b6fa022",color:"#3b6fa0",border:"1px solid #3b6fa044",borderRadius:"4px",padding:"1px 6px" }}>{proj.name}</span>}
+                        {inv.fileUrl&&<a href={inv.fileUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize:"0.68rem",color:"#3b6fa0",display:"flex",alignItems:"center",gap:"2px",textDecoration:"none" }}><Icon name="file" size={10}/>View</a>}
+                      </div>
+                      <div style={{ fontSize:"0.75rem",color:"#6b7280" }}>{inv.date}{inv.description?" · "+inv.description:""}</div>
+                    </div>
+                    <div style={{ fontFamily:"'DM Mono',monospace",fontSize:"1rem",fontWeight:700,color:"#e8eaf0",marginLeft:"1rem" }}>{fmt(inv.amount)}</div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Projects */}
+      {activeSection==="projects" && (
+        <div>
+          {propProjects.length===0 ? (
+            <div style={{ background:"#14181f",border:"1px dashed #2a2f3d",borderRadius:"10px",padding:"2.5rem",textAlign:"center",color:"#4b5563",fontSize:"0.85rem" }}>No projects for this property yet.</div>
+          ) : (
+            <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:"1rem" }}>
+              {propProjects.map(p=>{
+                const tasks = p.tasks||[]; const done=tasks.filter(t=>t.status==="done").length;
+                const pct = tasks.length>0?Math.round((done/tasks.length)*100):0;
+                const color = PROJECT_STATUS_COLORS[p.status]||"#6b7280";
+                const budget = tasks.reduce((s,t)=>s+Number(t.budget||0),0);
+                const actual = tasks.reduce((s,t)=>s+Number(t.actual||0),0);
+                return (
+                  <div key={p.id} style={{ background:"#14181f",border:"1px solid #1e2430",borderRadius:"12px",padding:"1.25rem",borderTop:`3px solid ${color}` }}>
+                    <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"0.5rem" }}>
+                      <div style={{ fontWeight:700,fontSize:"0.95rem",color:"#e8eaf0",flex:1,paddingRight:"0.5rem" }}>{p.name}</div>
+                      <Badge color={color} label={p.status}/>
+                    </div>
+                    {p.description&&<p style={{ margin:"0 0 0.75rem",fontSize:"0.78rem",color:"#6b7280",lineHeight:1.4 }}>{p.description}</p>}
+                    {tasks.length>0&&<div style={{ marginBottom:"0.75rem" }}>
+                      <div style={{ display:"flex",justifyContent:"space-between",fontSize:"0.68rem",color:"#6b7280",marginBottom:"4px" }}><span>{done}/{tasks.length} tasks</span><span>{pct}%</span></div>
+                      <div style={{ height:"4px",background:"#1e2430",borderRadius:"99px",overflow:"hidden" }}><div style={{ height:"100%",width:`${pct}%`,background:pct===100?"#4a7c59":"#e07b39",borderRadius:"99px" }}/></div>
+                    </div>}
+                    {(budget>0||actual>0)&&<div style={{ display:"flex",gap:"1rem" }}>
+                      {budget>0&&<div><div style={{ fontSize:"0.62rem",color:"#6b7280",textTransform:"uppercase" }}>Budget</div><div style={{ fontSize:"0.85rem",fontWeight:600,color:"#e07b39",fontFamily:"'DM Mono',monospace" }}>{fmt(budget)}</div></div>}
+                      {actual>0&&<div><div style={{ fontSize:"0.62rem",color:"#6b7280",textTransform:"uppercase" }}>Actual</div><div style={{ fontSize:"0.85rem",fontWeight:600,color:actual>budget?"#f87171":"#4a7c59",fontFamily:"'DM Mono',monospace" }}>{fmt(actual)}</div></div>}
+                    </div>}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Vendors */}
+      {activeSection==="vendors" && (
+        <div>
+          {propVendors.length===0 ? (
+            <div style={{ background:"#14181f",border:"1px dashed #2a2f3d",borderRadius:"10px",padding:"2.5rem",textAlign:"center",color:"#4b5563",fontSize:"0.85rem" }}>No vendors have been invoiced for this property yet.</div>
+          ) : (
+            <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:"1rem" }}>
+              {propVendors.map(v=>{
+                const spent = propInvoices.filter(i=>i.vendorId===v.id).reduce((s,i)=>s+Number(i.amount),0);
+                const invCount = propInvoices.filter(i=>i.vendorId===v.id).length;
+                return (
+                  <div key={v.id} style={{ background:"#14181f",border:"1px solid #1e2430",borderRadius:"10px",padding:"1rem" }}>
+                    <div style={{ fontWeight:600,color:"#e8eaf0",fontSize:"0.9rem",marginBottom:"0.25rem" }}>{v.name}</div>
+                    <div style={{ fontSize:"0.72rem",color:"#6b7280",marginBottom:"0.5rem" }}>{v.category}</div>
+                    {v.phone&&<div style={{ fontSize:"0.75rem",color:"#6b7280" }}>{v.phone}</div>}
+                    {v.email&&<div style={{ fontSize:"0.75rem",color:"#6b7280" }}>{v.email}</div>}
+                    <div style={{ marginTop:"0.6rem",paddingTop:"0.6rem",borderTop:"1px solid #1a1f2b",display:"flex",justifyContent:"space-between" }}>
+                      <div><div style={{ fontSize:"0.62rem",color:"#6b7280",textTransform:"uppercase" }}>Paid</div><div style={{ fontFamily:"'DM Mono',monospace",fontSize:"0.88rem",fontWeight:700,color:"#e07b39" }}>{fmt(spent)}</div></div>
+                      <div style={{ textAlign:"right" }}><div style={{ fontSize:"0.62rem",color:"#6b7280",textTransform:"uppercase" }}>Invoices</div><div style={{ fontFamily:"'DM Mono',monospace",fontSize:"0.88rem",fontWeight:700,color:"#3b6fa0" }}>{invCount}</div></div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {editModal && (
+        <Modal title="Edit Property" onClose={()=>setEditModal(false)}>
+          <Field label="Property Name"><input style={inputStyle} value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="e.g. Naples Main"/></Field>
+          <Field label="Street Address"><input style={inputStyle} value={form.address} onChange={e=>setForm(f=>({...f,address:e.target.value}))} placeholder="123 Main St"/></Field>
+          <Grid2>
+            <Field label="City"><input style={inputStyle} value={form.city} onChange={e=>setForm(f=>({...f,city:e.target.value}))} placeholder="City"/></Field>
+            <Field label="State"><select style={inputStyle} value={form.state} onChange={e=>setForm(f=>({...f,state:e.target.value}))}>{US_STATES.map(s=><option key={s}>{s}</option>)}</select></Field>
+          </Grid2>
+          <Field label="Color Tag">
+            <div style={{ display:"flex",gap:"0.5rem",flexWrap:"wrap" }}>
+              {PROPERTY_COLORS.map(c=><div key={c} onClick={()=>setForm(f=>({...f,color:c}))} style={{ width:"28px",height:"28px",borderRadius:"50%",background:c,cursor:"pointer",border:form.color===c?"3px solid #fff":"3px solid transparent" }}/>)}
+            </div>
+          </Field>
+          <div style={{ display:"flex",gap:"0.75rem",justifyContent:"flex-end" }}>
+            <BtnDanger onClick={handleDelete}><Icon name="trash" size={14}/>Delete</BtnDanger>
+            <button onClick={handleSave} style={{ background:"#e07b39",color:"#fff",border:"none",borderRadius:"8px",padding:"0.5rem 1.25rem",cursor:"pointer",fontSize:"0.85rem",fontWeight:600,marginLeft:"auto" }}>Save</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
 // ─── Properties ───────────────────────────────────────────────────────────────
-function Properties({ properties, isAdmin, viewingAs, onAdd, onUpdate, onDelete, invoices, tenants }) {
+function Properties({ properties, isAdmin, viewingAs, onAdd, onUpdate, onDelete, invoices, tenants, projects, vendors }) {
+  const [selectedProperty, setSelectedProperty] = useState(null);
   const [modal, setModal] = useState(null);
   const blank = { name:"",address:"",city:"",state:"FL",color:PROPERTY_COLORS[0] };
   const [form, setForm] = useState(blank);
   const readOnly = !!viewingAs;
 
+  if (selectedProperty) {
+    const live = properties.find(p=>p.id===selectedProperty);
+    if (!live) { setSelectedProperty(null); return null; }
+    return <PropertyDetail property={live} invoices={invoices} tenants={tenants} projects={projects||[]} vendors={vendors||[]} isAdmin={isAdmin} onUpdate={onUpdate} onDelete={async(id)=>{ await onDelete(id); setSelectedProperty(null); }} onBack={()=>setSelectedProperty(null)}/>;
+  }
+
   function openAdd() { setForm(blank); setModal("add"); }
-  function openEdit(p) { setForm({...p}); setModal(p); }
   async function handleSave() {
     if (!form.name.trim()) return;
     if (modal==="add") await onAdd(form);
     else await onUpdate({ ...form, id:modal.id });
     setModal(null);
-  }
-  async function handleDelete(id) {
-    if (!confirm("Delete this property?")) return;
-    await onDelete(id); setModal(null);
   }
 
   return (
@@ -778,7 +1018,8 @@ function Properties({ properties, isAdmin, viewingAs, onAdd, onUpdate, onDelete,
           const active = tenants.filter(t=>t.propertyId===p.id&&leaseStatus(t.leaseStart,t.leaseEnd)==="active");
           const leaseIncome = active.reduce((s,t)=>s+leaseTotalRent(t),0);
           return (
-            <div key={p.id} onClick={()=>!readOnly&&openEdit(p)} style={{ background:"#14181f",border:"1px solid #1e2430",borderRadius:"12px",padding:"1.25rem",borderTop:`3px solid ${p.color}`,cursor:readOnly?"default":"pointer" }}>
+            <div key={p.id} onClick={()=>setSelectedProperty(p.id)} style={{ background:"#14181f",border:"1px solid #1e2430",borderRadius:"12px",padding:"1.25rem",borderTop:`3px solid ${p.color}`,cursor:"pointer" }}
+              onMouseEnter={e=>e.currentTarget.style.borderColor="#2a3a4d"} onMouseLeave={e=>e.currentTarget.style.borderColor="#1e2430"}>
               <div style={{ fontSize:"1rem",fontWeight:700,color:"#e8eaf0",marginBottom:"0.2rem" }}>{p.name}</div>
               <div style={{ fontSize:"0.78rem",color:"#6b7280" }}>{p.city}, {p.state}</div>
               <div style={{ fontSize:"0.74rem",color:"#4b5563" }}>{p.address}</div>
@@ -787,12 +1028,13 @@ function Properties({ properties, isAdmin, viewingAs, onAdd, onUpdate, onDelete,
                   <div key={x.l}><div style={{ fontSize:"0.62rem",color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.05em" }}>{x.l}</div><div style={{ fontSize:"0.95rem",fontWeight:700,color:x.c,fontFamily:"'DM Mono',monospace" }}>{x.v}</div></div>
                 ))}
               </div>
+              <div style={{ marginTop:"0.5rem",fontSize:"0.68rem",color:"#4b5563" }}>Click to view details →</div>
             </div>
           );
         })}
       </div>
       {modal && !readOnly && (
-        <Modal title={modal==="add"?"Add Property":"Edit Property"} onClose={()=>setModal(null)}>
+        <Modal title="Add Property" onClose={()=>setModal(null)}>
           <Field label="Property Name"><input style={inputStyle} value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="e.g. Naples Main"/></Field>
           <Field label="Street Address"><input style={inputStyle} value={form.address} onChange={e=>setForm(f=>({...f,address:e.target.value}))} placeholder="123 Main St"/></Field>
           <Grid2>
@@ -805,7 +1047,6 @@ function Properties({ properties, isAdmin, viewingAs, onAdd, onUpdate, onDelete,
             </div>
           </Field>
           <div style={{ display:"flex",gap:"0.75rem",justifyContent:"flex-end" }}>
-            {modal!=="add" && <BtnDanger onClick={()=>handleDelete(modal.id)}><Icon name="trash" size={14}/>Delete</BtnDanger>}
             <button onClick={handleSave} style={{ background:"#e07b39",color:"#fff",border:"none",borderRadius:"8px",padding:"0.5rem 1.25rem",cursor:"pointer",fontSize:"0.85rem",fontWeight:600,marginLeft:"auto" }}>Save</button>
           </div>
         </Modal>
@@ -1012,11 +1253,124 @@ function VendorDropZone({ onConfirm }) {
   );
 }
 
+// ─── Vendor Detail View ───────────────────────────────────────────────────────
+function VendorDetail({ vendor, invoices, properties, projects, isAdmin, onUpdate, onDelete, onBack }) {
+  const [editModal, setEditModal] = useState(false);
+  const [form, setForm] = useState({...vendor});
+  const vendorInvoices = invoices.filter(i=>i.vendorId===vendor.id).sort((a,b)=>new Date(b.date)-new Date(a.date));
+  const totalSpent = vendorInvoices.reduce((s,i)=>s+Number(i.amount),0);
+  const byProp = properties.map(p=>({ ...p, total:vendorInvoices.filter(i=>i.propertyId===p.id).reduce((s,i)=>s+Number(i.amount),0) })).filter(p=>p.total>0);
+
+  async function handleSave() {
+    if (!form.name.trim()) return;
+    await onUpdate({...form,id:vendor.id});
+    setEditModal(false);
+  }
+  async function handleDelete() {
+    if (!confirm("Delete this vendor?")) return;
+    await onDelete(vendor.id);
+    onBack();
+  }
+
+  return (
+    <div>
+      <button onClick={onBack} style={{ display:"flex",alignItems:"center",gap:"6px",background:"none",border:"none",color:"#6b7280",cursor:"pointer",fontSize:"0.83rem",marginBottom:"1.25rem",padding:0 }}>
+        <Icon name="arrowLeft" size={14}/>Back to Vendors
+      </button>
+
+      <div style={{ background:"#14181f",border:"1px solid #1e2430",borderRadius:"14px",padding:"1.5rem",marginBottom:"1.5rem" }}>
+        <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:"0.75rem",marginBottom:"1rem" }}>
+          <div>
+            <h2 style={{ margin:"0 0 0.25rem",fontSize:"1.2rem",fontWeight:700,color:"#e8eaf0" }}>{vendor.name}</h2>
+            <Badge color="#6b7280" label={vendor.category}/>
+          </div>
+          <div style={{ display:"flex",gap:"0.5rem" }}>
+            <BtnSecondary onClick={()=>{ setForm({...vendor}); setEditModal(true); }}><Icon name="wrench" size={13}/>Edit</BtnSecondary>
+          </div>
+        </div>
+        <div style={{ display:"flex",flexDirection:"column",gap:"4px",marginBottom:"1rem" }}>
+          {vendor.phone&&<div style={{ display:"flex",alignItems:"center",gap:"6px",fontSize:"0.83rem",color:"#94a3b8" }}><Icon name="phone" size={13}/>{vendor.phone}</div>}
+          {vendor.email&&<div style={{ display:"flex",alignItems:"center",gap:"6px",fontSize:"0.83rem",color:"#94a3b8" }}><Icon name="mail" size={13}/>{vendor.email}</div>}
+          {vendor.notes&&<div style={{ fontSize:"0.78rem",color:"#6b7280",fontStyle:"italic",marginTop:"4px" }}>{vendor.notes}</div>}
+        </div>
+        <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(110px,1fr))",gap:"0.75rem",paddingTop:"0.75rem",borderTop:"1px solid #1e2430" }}>
+          {[{l:"Total Paid",v:fmt(totalSpent),c:"#e07b39"},{l:"Invoices",v:vendorInvoices.length,c:"#3b6fa0"},{l:"Properties",v:byProp.length,c:"#4a7c59"}].map(x=>(
+            <div key={x.l}><div style={{ fontSize:"0.62rem",color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:"2px" }}>{x.l}</div><div style={{ fontSize:"1.1rem",fontWeight:700,color:x.c,fontFamily:"'DM Mono',monospace" }}>{x.v}</div></div>
+          ))}
+        </div>
+        {byProp.length>0&&<div style={{ marginTop:"1rem",paddingTop:"0.75rem",borderTop:"1px solid #1e2430" }}>
+          <div style={{ fontSize:"0.65rem",color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:"0.5rem" }}>Spend by Property</div>
+          {byProp.map(p=>(
+            <div key={p.id} style={{ display:"flex",justifyContent:"space-between",alignItems:"center",padding:"0.3rem 0",borderBottom:"1px solid #1a1f2b" }}>
+              <span style={{ display:"flex",alignItems:"center",gap:"6px",fontSize:"0.82rem",color:"#94a3b8" }}><span style={{ width:"6px",height:"6px",borderRadius:"50%",background:p.color,display:"inline-block" }}/>{p.name}</span>
+              <span style={{ fontFamily:"'DM Mono',monospace",fontSize:"0.82rem",fontWeight:600,color:"#e8eaf0" }}>{fmt(p.total)}</span>
+            </div>
+          ))}
+        </div>}
+      </div>
+
+      <div style={{ fontSize:"0.72rem",fontWeight:700,color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:"0.75rem" }}>Invoice History ({vendorInvoices.length})</div>
+      {vendorInvoices.length===0 ? (
+        <div style={{ background:"#14181f",border:"1px dashed #2a2f3d",borderRadius:"10px",padding:"2.5rem",textAlign:"center",color:"#4b5563",fontSize:"0.85rem" }}>No invoices from this vendor yet.</div>
+      ) : (
+        <div style={{ background:"#14181f",border:"1px solid #1e2430",borderRadius:"12px",overflow:"hidden" }}>
+          {vendorInvoices.map((inv,idx)=>{
+            const prop = properties.find(p=>p.id===inv.propertyId);
+            const proj = projects.find(p=>p.id===inv.projectId);
+            const rec = RECURRING_OPTIONS.find(r=>r.value===inv.recurring)||RECURRING_OPTIONS[0];
+            return (
+              <div key={inv.id} style={{ display:"flex",alignItems:"center",padding:"0.85rem 1.25rem",borderBottom:idx<vendorInvoices.length-1?"1px solid #1a1f2b":"none" }}>
+                <div style={{ width:"4px",height:"36px",borderRadius:"99px",background:prop?.color||"#6b7280",marginRight:"1rem",flexShrink:0 }}/>
+                <div style={{ flex:1,minWidth:0 }}>
+                  <div style={{ display:"flex",alignItems:"center",gap:"0.5rem",marginBottom:"0.2rem",flexWrap:"wrap" }}>
+                    <span style={{ fontSize:"0.85rem",fontWeight:600,color:"#e8eaf0" }}>{prop?.name||"—"}</span>
+                    {inv.invoiceNumber&&<span style={{ fontSize:"0.72rem",color:"#6b7280",fontFamily:"'DM Mono',monospace" }}>#{inv.invoiceNumber}</span>}
+                    <span style={{ fontSize:"0.68rem",background:"#1e2430",color:"#6b7280",borderRadius:"4px",padding:"1px 6px" }}>{inv.category}</span>
+                    {inv.recurring&&inv.recurring!=="one-time"&&<span style={{ fontSize:"0.65rem",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em",color:rec.color,background:rec.color+"22",border:`1px solid ${rec.color}44`,borderRadius:"99px",padding:"1px 7px" }}>↻ {rec.label}</span>}
+                    {proj&&<span style={{ fontSize:"0.68rem",background:"#3b6fa022",color:"#3b6fa0",border:"1px solid #3b6fa044",borderRadius:"4px",padding:"1px 6px" }}>{proj.name}</span>}
+                    {inv.fileUrl&&<a href={inv.fileUrl} target="_blank" rel="noopener noreferrer" onClick={e=>e.stopPropagation()} style={{ fontSize:"0.68rem",color:"#3b6fa0",display:"flex",alignItems:"center",gap:"2px",textDecoration:"none" }}><Icon name="file" size={10}/>View</a>}
+                  </div>
+                  <div style={{ fontSize:"0.75rem",color:"#6b7280" }}>{inv.date}{inv.description?" · "+inv.description:""}</div>
+                </div>
+                <div style={{ fontFamily:"'DM Mono',monospace",fontSize:"1rem",fontWeight:700,color:"#e8eaf0",marginLeft:"1rem" }}>{fmt(inv.amount)}</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {editModal && (
+        <Modal title="Edit Vendor" onClose={()=>setEditModal(false)}>
+          <Field label="Vendor Name"><input style={inputStyle} value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="Business name"/></Field>
+          <Field label="Category"><select style={inputStyle} value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))}>{CATEGORIES.map(c=><option key={c}>{c}</option>)}</select></Field>
+          <Grid2>
+            <Field label="Phone"><input style={inputStyle} value={form.phone} onChange={e=>setForm(f=>({...f,phone:e.target.value}))} placeholder="555-0100"/></Field>
+            <Field label="Email"><input style={inputStyle} value={form.email} onChange={e=>setForm(f=>({...f,email:e.target.value}))} placeholder="email@vendor.com"/></Field>
+          </Grid2>
+          <Field label="Notes"><textarea style={{...inputStyle,resize:"vertical",minHeight:"60px"}} value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))} placeholder="Optional notes"/></Field>
+          <div style={{ display:"flex",gap:"0.75rem",justifyContent:"flex-end" }}>
+            {isAdmin && <BtnDanger onClick={handleDelete}><Icon name="trash" size={14}/>Delete</BtnDanger>}
+            <button onClick={handleSave} style={{ background:"#e07b39",color:"#fff",border:"none",borderRadius:"8px",padding:"0.5rem 1.25rem",cursor:"pointer",fontSize:"0.85rem",fontWeight:600,marginLeft:"auto" }}>Save</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
 // ─── Vendors (shared) ─────────────────────────────────────────────────────────
-function Vendors({ vendors, isAdmin, invoices, onAdd, onUpdate, onDelete }) {
+function Vendors({ vendors, isAdmin, invoices, properties, projects, onAdd, onUpdate, onDelete }) {
+  const [selectedVendor, setSelectedVendor] = useState(null);
   const [modal, setModal] = useState(null);
   const blank = { name:"",category:CATEGORIES[0],phone:"",email:"",notes:"" };
   const [form, setForm] = useState(blank);
+
+  // If a vendor is selected, show its detail view
+  if (selectedVendor) {
+    const live = vendors.find(v=>v.id===selectedVendor) || vendors[0];
+    if (!live) { setSelectedVendor(null); return null; }
+    return <VendorDetail vendor={live} invoices={invoices} properties={properties} projects={projects||[]} isAdmin={isAdmin} onUpdate={onUpdate} onDelete={onDelete} onBack={()=>setSelectedVendor(null)}/>;
+  }
 
   async function handleSave() {
     if (!form.name.trim()) return;
@@ -1048,12 +1402,14 @@ function Vendors({ vendors, isAdmin, invoices, onAdd, onUpdate, onDelete }) {
             {g.vendors.map(v=>{
               const spent = invoices.filter(i=>i.vendorId===v.id).reduce((s,i)=>s+Number(i.amount),0);
               return (
-                <div key={v.id} onClick={()=>{setForm({...v});setModal(v);}} style={{ background:"#14181f",border:"1px solid #1e2430",borderRadius:"10px",padding:"1rem",cursor:"pointer" }}>
+                <div key={v.id} onClick={()=>setSelectedVendor(v.id)} style={{ background:"#14181f",border:"1px solid #1e2430",borderRadius:"10px",padding:"1rem",cursor:"pointer" }}
+                  onMouseEnter={e=>e.currentTarget.style.borderColor="#2a3a4d"} onMouseLeave={e=>e.currentTarget.style.borderColor="#1e2430"}>
                   <div style={{ fontWeight:600,color:"#e8eaf0",fontSize:"0.9rem",marginBottom:"0.25rem" }}>{v.name}</div>
                   {v.phone&&<div style={{ fontSize:"0.75rem",color:"#6b7280" }}>{v.phone}</div>}
                   {v.email&&<div style={{ fontSize:"0.75rem",color:"#6b7280" }}>{v.email}</div>}
                   {v.notes&&<div style={{ fontSize:"0.72rem",color:"#4b5563",marginTop:"0.25rem",fontStyle:"italic" }}>{v.notes}</div>}
                   <div style={{ marginTop:"0.6rem",fontSize:"0.78rem",color:"#94a3b8",fontFamily:"'DM Mono',monospace" }}>Total paid: {fmt(spent)}</div>
+                  <div style={{ marginTop:"0.35rem",fontSize:"0.68rem",color:"#4b5563" }}>Click to view invoices →</div>
                 </div>
               );
             })}
@@ -1234,9 +1590,14 @@ function Invoices({ invoices, properties, vendors, projects, viewingAs, isAdmin,
               </div>
             </div>
           ) : (
-            <button onClick={()=>fileRef.current?.click()} style={{ width:"100%",background:"#0d1117",border:"1px dashed #2a2f3d",borderRadius:"8px",padding:"0.65rem",color:"#6b7280",cursor:"pointer",fontSize:"0.82rem",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.5rem",marginBottom:"0.5rem" }}>
-              <Icon name="upload" size={13}/>Attach PDF or image
-            </button>
+            <div
+              onDrop={e=>{ e.preventDefault(); e.stopPropagation(); const f=e.dataTransfer.files[0]; if(f){ setPendingFile(f); setForm(ff=>({...ff,fileName:f.name})); } }}
+              onDragOver={e=>{ e.preventDefault(); e.stopPropagation(); e.currentTarget.style.borderColor="#e07b39"; e.currentTarget.style.background="#1c1407"; }}
+              onDragLeave={e=>{ e.currentTarget.style.borderColor="#2a2f3d"; e.currentTarget.style.background="#0d1117"; }}
+              onClick={()=>fileRef.current?.click()}
+              style={{ width:"100%",background:"#0d1117",border:"1px dashed #2a2f3d",borderRadius:"8px",padding:"0.65rem",color:"#6b7280",cursor:"pointer",fontSize:"0.82rem",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.5rem",marginBottom:"0.5rem",transition:"all 0.15s" }}>
+              <Icon name="upload" size={13}/>Attach PDF or image — or drag &amp; drop here
+            </div>
           )}
 
           <div style={{ display:"flex",gap:"0.75rem",justifyContent:"flex-end",marginTop:"0.5rem" }}>
@@ -1844,9 +2205,9 @@ export default function App() {
         {/* Page content */}
         <div className="page-content" style={{ maxWidth:"980px",margin:"0 auto",padding:"1.75rem 1.25rem" }}>
           {tab==="dashboard"   && <Dashboard properties={properties} invoices={invoices} vendors={vendors} tenants={tenants} projects={projects} isAdmin={isAdmin} viewingAs={viewingAs}/>}
-          {tab==="properties"  && <Properties properties={properties} isAdmin={isAdmin} viewingAs={viewingAs} onAdd={addProperty} onUpdate={updateProperty} onDelete={deleteProperty} invoices={invoices} tenants={tenants}/>}
+          {tab==="properties"  && <Properties properties={properties} isAdmin={isAdmin} viewingAs={viewingAs} onAdd={addProperty} onUpdate={updateProperty} onDelete={deleteProperty} invoices={invoices} tenants={tenants} projects={projects} vendors={vendors}/>}
           {tab==="tenants"     && <Tenants tenants={tenants} properties={properties} viewingAs={viewingAs} onAdd={addTenant} onUpdate={updateTenant} onDelete={deleteTenant}/>}
-          {tab==="vendors"     && <Vendors vendors={vendors} isAdmin={isAdmin} invoices={invoices} onAdd={addVendor} onUpdate={updateVendor} onDelete={deleteVendor}/>}
+          {tab==="vendors"     && <Vendors vendors={vendors} isAdmin={isAdmin} invoices={invoices} properties={properties} projects={projects} onAdd={addVendor} onUpdate={updateVendor} onDelete={deleteVendor}/>}
           {tab==="invoices"    && <Invoices invoices={invoices} properties={properties} vendors={vendors} projects={projects} viewingAs={viewingAs} isAdmin={isAdmin} onAdd={addInvoice} onUpdate={updateInvoice} onDelete={deleteInvoice}/>}
           {tab==="projects"    && <Projects projects={projects} properties={properties} vendors={vendors} invoices={invoices} viewingAs={viewingAs} isAdmin={isAdmin} onAdd={addProject} onUpdate={updateProject} onDelete={deleteProject} onAddInvoice={addInvoice} onUpdateInvoice={updateInvoice}/>}
           {tab==="members"     && isAdmin && <MembersTab profiles={profiles} currentUser={profile} onRoleChange={handleRoleChange}/>}
