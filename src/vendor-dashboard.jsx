@@ -2588,7 +2588,7 @@ function ProjectDetail({ project, projects, vendors, properties, invoices, readO
                 setMovingInvoice(null);
               }}>
               <option value="">— Remove from project —</option>
-              {projects.map(p=><option key={p.id} value={p.id}>{p.name}{p.id===live.id?" (current)":""}</option>)}
+              {projects.map(p=>{const prop=properties.find(x=>x.id===p.propertyId);return <option key={p.id} value={p.id}>{p.name}{prop?` — ${prop.name}`:""}{p.id===live.id?" (current)":""}</option>;})}
             </select>
           </Field>
           <div style={{ fontSize:"0.75rem",color:"#6b7280",marginTop:"-0.5rem" }}>Selecting a project moves the invoice immediately.</div>
