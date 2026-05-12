@@ -522,21 +522,257 @@ function InvoiceDropZone({ vendors, properties, projects, onConfirm }) {
   );
 }
 
-// ─── Dashboard ────────────────────────────────────────────────────────────────
+// ─── Chart Components ─────────────────────────────────────────────────────────
+
+// Horizontal bar chart — shows multiple items ranked by value
+function HBarChart({ data, colorKey="color", valueKey="value", labelKey="label", height=220, formatVal=fmt }) {
+  if (!data||data.length===0) return <div style={{ color:"#4b5563",fontSize:"0.85rem",padding:"1rem 0" }}>No data yet.</div>;
+  const max = Math.max(...data.map(d=>d[valueKey]||0), 1);
+  return (
+    <div style={{ display:"flex",flexDirection:"column",gap:"10px",paddingTop:"4px" }}>
+      {data.map((d,i)=>(
+        <div key={i}>
+          <div style={{ display:"flex",justifyContent:"space-between",marginBottom:"4px" }}>
+            <span style={{ fontSize:"0.78rem",color:"#cbd5e1",fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"65%" }}>{d[labelKey]}</span>
+            <span style={{ fontSize:"0.78rem",color:"#e8eaf0",fontFamily:"'DM Mono',monospace",fontWeight:600,flexShrink:0 }}>{formatVal(d[valueKey]||0)}</span>
+          </div>
+          <div style={{ height:"8px",background:"#1e2430",borderRadius:"99px",overflow:"hidden" }}>
+            <div style={{ height:"100%",width:`${Math.max(2,(d[valueKey]||0)/max*100)}%`,background:d[colorKey]||"#e07b39",borderRadius:"99px",transition:"width 0.6s ease" }}/>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Grouped bar chart — income vs expense per property
+function GroupedBarChart({ data, height=180 }) {
+  if (!data||data.length===0) return <div style={{ color:"#4b5563",fontSize:"0.85rem",padding:"1rem 0" }}>No data yet.</div>;
+  const max = Math.max(...data.flatMap(d=>[d.income||0,d.expense||0]),1);
+  const barW = Math.max(18, Math.min(40, Math.floor(340/data.length/2)-4));
+  const gap = barW*0.5;
+  const totalW = data.length*(barW*2+gap)+(data.length-1)*16;
+  const chartH = height-40;
+  return (
+    <div style={{ overflowX:"auto" }}>
+      <svg width={Math.max(totalW+32,300)} height={height} style={{ display:"block" }}>
+        {/* Grid lines */}
+        {[0,0.25,0.5,0.75,1].map(pct=>(
+          <line key={pct} x1={16} x2={Math.max(totalW+32,300)-8} y1={8+chartH*(1-pct)} y2={8+chartH*(1-pct)} stroke="#1e2430" strokeWidth="1"/>
+        ))}
+        {data.map((d,i)=>{
+          const x = 16+i*(barW*2+gap+16);
+          const ih = Math.max(2,((d.income||0)/max)*chartH);
+          const eh = Math.max(2,((d.expense||0)/max)*chartH);
+          return (
+            <g key={i}>
+              {/* Income bar */}
+              <rect x={x} y={8+chartH-ih} width={barW} height={ih} fill="#4a7c59" rx="3" opacity="0.85"/>
+              {/* Expense bar */}
+              <rect x={x+barW+3} y={8+chartH-eh} width={barW} height={eh} fill="#e07b39" rx="3" opacity="0.85"/>
+              {/* Label */}
+              <text x={x+barW} y={height-4} textAnchor="middle" fontSize="9" fill="#6b7280" fontFamily="DM Sans,sans-serif">
+                {d.name?.split(" ")[0]||""}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+      <div style={{ display:"flex",gap:"1rem",marginTop:"4px" }}>
+        <div style={{ display:"flex",alignItems:"center",gap:"5px",fontSize:"0.72rem",color:"#6b7280" }}><span style={{ width:"10px",height:"10px",borderRadius:"2px",background:"#4a7c59",display:"inline-block" }}/>Income</div>
+        <div style={{ display:"flex",alignItems:"center",gap:"5px",fontSize:"0.72rem",color:"#6b7280" }}><span style={{ width:"10px",height:"10px",borderRadius:"2px",background:"#e07b39",display:"inline-block" }}/>Expenses</div>
+      </div>
+    </div>
+  );
+}
+
+// Donut chart
+function DonutChart({ data, size=160, thickness=28 }) {
+  if (!data||data.length===0) return <div style={{ color:"#4b5563",fontSize:"0.85rem",padding:"1rem 0" }}>No data yet.</div>;
+  const total = data.reduce((s,d)=>s+(d.value||0),0);
+  if (total===0) return <div style={{ color:"#4b5563",fontSize:"0.85rem",padding:"1rem 0" }}>No data yet.</div>;
+  const r = (size/2)-thickness/2-2;
+  const cx = size/2; const cy = size/2;
+  const circ = 2*Math.PI*r;
+  let offset = 0;
+  const slices = data.map(d=>{
+    const pct = (d.value||0)/total;
+    const dash = pct*circ;
+    const slice = { ...d, dash, offset, pct };
+    offset += dash;
+    return slice;
+  });
+  return (
+    <div style={{ display:"flex",alignItems:"center",gap:"1.25rem",flexWrap:"wrap" }}>
+      <svg width={size} height={size} style={{ flexShrink:0 }}>
+        <circle cx={cx} cy={cy} r={r} fill="none" stroke="#1e2430" strokeWidth={thickness}/>
+        {slices.map((s,i)=>(
+          <circle key={i} cx={cx} cy={cy} r={r} fill="none" stroke={s.color||"#6b7280"} strokeWidth={thickness}
+            strokeDasharray={`${s.dash} ${circ-s.dash}`} strokeDashoffset={-s.offset+circ*0.25}
+            style={{ transform:"rotate(-90deg)",transformOrigin:`${cx}px ${cy}px` }} opacity="0.9"/>
+        ))}
+        <text x={cx} y={cy-6} textAnchor="middle" fontSize="13" fontWeight="700" fill="#e8eaf0" fontFamily="DM Mono,monospace">{fmt(total)}</text>
+        <text x={cx} y={cy+10} textAnchor="middle" fontSize="9" fill="#6b7280" fontFamily="DM Sans,sans-serif">TOTAL</text>
+      </svg>
+      <div style={{ display:"flex",flexDirection:"column",gap:"6px",flex:1,minWidth:0 }}>
+        {slices.map((s,i)=>(
+          <div key={i} style={{ display:"flex",alignItems:"center",gap:"6px" }}>
+            <span style={{ width:"8px",height:"8px",borderRadius:"50%",background:s.color||"#6b7280",flexShrink:0 }}/>
+            <span style={{ fontSize:"0.75rem",color:"#94a3b8",flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{s.label}</span>
+            <span style={{ fontSize:"0.75rem",color:"#e8eaf0",fontFamily:"'DM Mono',monospace",fontWeight:600,flexShrink:0 }}>{Math.round(s.pct*100)}%</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Sparkline / area chart — monthly trend
+function SparkLine({ invoices, months=12, color="#e07b39", height=80 }) {
+  const now = new Date();
+  const buckets = Array.from({length:months},(_,i)=>{
+    const d = new Date(now.getFullYear(),now.getMonth()-months+1+i,1);
+    return { label:`${d.toLocaleString("default",{month:"short"})} ${d.getFullYear().toString().slice(2)}`, year:d.getFullYear(), month:d.getMonth(), total:0 };
+  });
+  invoices.forEach(inv=>{
+    const d = new Date(inv.date);
+    const b = buckets.find(b=>b.year===d.getFullYear()&&b.month===d.getMonth());
+    if (b) b.total += Number(inv.amount)||0;
+  });
+  const max = Math.max(...buckets.map(b=>b.total),1);
+  const w = 600; const h = height;
+  const pts = buckets.map((b,i)=>({ x:i/(months-1)*(w-32)+16, y:h-8-((b.total/max)*(h-24)) }));
+  const path = pts.map((p,i)=>i===0?`M${p.x},${p.y}`:`L${p.x},${p.y}`).join(" ");
+  const area = `${path} L${pts[pts.length-1].x},${h-8} L${pts[0].x},${h-8} Z`;
+  return (
+    <div style={{ overflowX:"auto" }}>
+      <svg viewBox={`0 0 ${w} ${h}`} width="100%" height={h} preserveAspectRatio="none" style={{ display:"block" }}>
+        <defs>
+          <linearGradient id="spark-grad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity="0.3"/>
+            <stop offset="100%" stopColor={color} stopOpacity="0.02"/>
+          </linearGradient>
+        </defs>
+        <path d={area} fill="url(#spark-grad)"/>
+        <path d={path} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round"/>
+        {pts.map((p,i)=>(
+          <circle key={i} cx={p.x} cy={p.y} r="3" fill={color} opacity={buckets[i].total>0?0.9:0}/>
+        ))}
+        {/* X labels — show every other month to avoid crowding */}
+        {buckets.map((b,i)=>i%2===0&&(
+          <text key={i} x={pts[i].x} y={h} textAnchor="middle" fontSize="8" fill="#4b5563" fontFamily="DM Sans,sans-serif">{b.label}</text>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
+// Chart card wrapper
+function ChartCard({ title, children, style }) {
+  return (
+    <div style={{ background:"#14181f",border:"1px solid #1e2430",borderRadius:"12px",padding:"1.25rem",...style }}>
+      <div style={{ fontSize:"0.7rem",fontWeight:700,color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:"1rem" }}>{title}</div>
+      {children}
+    </div>
+  );
+}
 function Dashboard({ properties, invoices, vendors, tenants, projects, isAdmin, viewingAs }) {
   const grandExpense = invoices.reduce((s,i)=>s+Number(i.amount),0);
   const activeTenants = tenants.filter(t=>leaseStatus(t.leaseStart,t.leaseEnd)==="active");
-  // Total rent = sum of actual lease totals (seasonal uses real months, annual uses 12)
   const totalRentIncome = activeTenants.reduce((s,t)=>s+leaseTotalRent(t),0);
   const expiringCount = tenants.filter(t=>leaseStatus(t.leaseStart,t.leaseEnd)==="expiring").length;
   const activeProjects = projects.filter(p=>p.status==="In Progress").length;
+  const netIncome = totalRentIncome - grandExpense;
 
-  const propTotals = properties.map(p=>({ ...p,
+  const propTotals = properties.map(p=>({
+    ...p,
     expense: invoices.filter(i=>i.propertyId===p.id).reduce((s,i)=>s+Number(i.amount),0),
     income: tenants.filter(t=>t.propertyId===p.id&&leaseStatus(t.leaseStart,t.leaseEnd)==="active").reduce((s,t)=>s+leaseTotalRent(t),0),
   }));
-  const byCategory = CATEGORIES.map(cat=>({ cat, total:invoices.filter(i=>i.category===cat).reduce((s,i)=>s+Number(i.amount),0) })).filter(x=>x.total>0).sort((a,b)=>b.total-a.total);
+
+  const CHART_COLORS = ["#e07b39","#3b6fa0","#4a7c59","#8b5cf6","#0891b2","#d946a8","#b45309","#e11d48","#34d399","#f87171","#60a5fa","#a78bfa","#fbbf24","#6b7280","#94a3b8"];
+  const byCategory = CATEGORIES.map((cat,i)=>({
+    label:cat, value:invoices.filter(inv=>inv.category===cat).reduce((s,i)=>s+Number(i.amount),0), color:CHART_COLORS[i%CHART_COLORS.length],
+  })).filter(x=>x.value>0).sort((a,b)=>b.value-a.value);
+
   const recent = [...invoices].sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,5);
+  const topVendors = vendors.map(v=>({ label:v.name, value:invoices.filter(i=>i.vendorId===v.id).reduce((s,i)=>s+Number(i.amount),0), color:"#e07b39" })).filter(v=>v.value>0).sort((a,b)=>b.value-a.value).slice(0,6);
+
+  return (
+    <div>
+      {viewingAs && (
+        <div style={{ background:"#0d1520",border:"1px solid #1e3a5f",borderRadius:"10px",padding:"0.75rem 1.25rem",marginBottom:"1.25rem",fontSize:"0.82rem",color:"#3b6fa0",display:"flex",alignItems:"center",gap:"0.5rem" }}>
+          <Icon name="eye" size={13}/>Viewing dashboard for <strong>{viewingAs.full_name||viewingAs.email}</strong>
+        </div>
+      )}
+      <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(148px,1fr))",gap:"1rem",marginBottom:"1.5rem" }}>
+        {[
+          { label:"Total Expenses", value:fmt(grandExpense), accent:"#e07b39" },
+          { label:"Rent Income", value:fmt(totalRentIncome), accent:"#4a7c59" },
+          { label:"Net Income", value:fmt(netIncome), accent:netIncome>=0?"#4a7c59":"#f87171" },
+          { label:"Active Tenants", value:activeTenants.length, accent:"#3b6fa0" },
+          { label:"Properties", value:properties.length, accent:"#8b5cf6" },
+          { label:"Active Projects", value:activeProjects, accent:"#b45309" },
+        ].map(k=>(
+          <div key={k.label} style={{ background:"#14181f",border:"1px solid #1e2430",borderRadius:"12px",padding:"1rem 1.15rem",borderTop:`3px solid ${k.accent}` }}>
+            <div style={{ fontSize:"0.68rem",fontWeight:700,color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:"0.4rem" }}>{k.label}</div>
+            <div style={{ fontSize:"1.5rem",fontWeight:700,color:"#e8eaf0",fontFamily:"'DM Mono',monospace" }}>{k.value}</div>
+          </div>
+        ))}
+      </div>
+
+      <ChartCard title="Monthly Spend — Last 12 Months" style={{ marginBottom:"1.25rem" }}>
+        <SparkLine invoices={invoices} months={12} color="#e07b39" height={90}/>
+      </ChartCard>
+
+      <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:"1.25rem",marginBottom:"1.25rem" }}>
+        <ChartCard title="Income vs. Expenses by Property">
+          <GroupedBarChart data={propTotals} height={180}/>
+          {propTotals.map(p=>(
+            <div key={p.id} style={{ display:"flex",justifyContent:"space-between",alignItems:"center",padding:"0.3rem 0",borderBottom:"1px solid #1a1f2b" }}>
+              <span style={{ display:"flex",alignItems:"center",gap:"6px",fontSize:"0.78rem",color:"#94a3b8" }}><span style={{ width:"6px",height:"6px",borderRadius:"50%",background:p.color,display:"inline-block" }}/>{p.name}</span>
+              <span style={{ fontSize:"0.78rem",fontFamily:"'DM Mono',monospace",fontWeight:600,color:p.income-p.expense>=0?"#4a7c59":"#f87171" }}>net {fmt(p.income-p.expense)}</span>
+            </div>
+          ))}
+        </ChartCard>
+        <ChartCard title="Expenses by Category">
+          <DonutChart data={byCategory.slice(0,8)} size={140} thickness={24}/>
+        </ChartCard>
+      </div>
+
+      <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:"1.25rem",marginBottom:"1.25rem" }}>
+        <ChartCard title="Top Vendors by Spend">
+          <HBarChart data={topVendors} colorKey="color" valueKey="value" labelKey="label"/>
+        </ChartCard>
+        <ChartCard title="Recent Invoices">
+          {recent.length===0 && <div style={{ color:"#4b5563",fontSize:"0.85rem" }}>No invoices yet.</div>}
+          {recent.map(inv=>{
+            const prop = properties.find(p=>p.id===inv.propertyId);
+            const vend = vendors.find(v=>v.id===inv.vendorId);
+            return (
+              <div key={inv.id} style={{ display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0.6rem 0",borderBottom:"1px solid #1a1f2b" }}>
+                <div style={{ display:"flex",alignItems:"center",gap:"0.75rem" }}>
+                  <div style={{ width:"6px",height:"6px",borderRadius:"50%",background:prop?.color||"#6b7280",flexShrink:0 }}/>
+                  <div>
+                    <div style={{ fontSize:"0.82rem",color:"#cbd5e1" }}>{vend?.name||"—"}</div>
+                    <div style={{ fontSize:"0.7rem",color:"#6b7280" }}>{prop?.name} · {inv.date}</div>
+                  </div>
+                </div>
+                <span style={{ fontFamily:"'DM Mono',monospace",fontSize:"0.88rem",fontWeight:600,color:"#e8eaf0" }}>{fmt(inv.amount)}</span>
+              </div>
+            );
+          })}
+        </ChartCard>
+      </div>
+
+      {expiringCount>0 && (
+        <div style={{ background:"#1c1407",border:"1px solid #78350f",borderRadius:"10px",padding:"0.9rem 1.25rem",display:"flex",alignItems:"center",gap:"0.75rem" }}>
+          <Icon name="calendar" size={16}/><span style={{ fontSize:"0.85rem",color:"#fbbf24" }}><strong>{expiringCount} lease{expiringCount>1?"s":""}</strong> expiring within 60 days.</span>
+        </div>
+      )}
+    </div>
+  );
+}
 
   return (
     <div>
@@ -1011,6 +1247,17 @@ function Properties({ properties, isAdmin, viewingAs, onAdd, onUpdate, onDelete,
         {!readOnly && <BtnPrimary onClick={openAdd}><Icon name="plus" size={14}/>Add Property</BtnPrimary>}
       </div>
       {!readOnly && <PropertyDropZone onConfirm={f=>onAdd(f)}/>}
+
+      {properties.length>0 && (
+        <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:"1.25rem",marginBottom:"1.5rem" }}>
+          <ChartCard title="Expenses by Property">
+            <HBarChart data={properties.map(p=>({ label:p.name, value:invoices.filter(i=>i.propertyId===p.id).reduce((s,i)=>s+Number(i.amount),0), color:p.color })).filter(d=>d.value>0).sort((a,b)=>b.value-a.value)} colorKey="color" valueKey="value" labelKey="label"/>
+          </ChartCard>
+          <ChartCard title="Income vs. Expenses">
+            <GroupedBarChart data={properties.map(p=>({ name:p.name, income:tenants.filter(t=>t.propertyId===p.id&&leaseStatus(t.leaseStart,t.leaseEnd)==="active").reduce((s,t)=>s+leaseTotalRent(t),0), expense:invoices.filter(i=>i.propertyId===p.id).reduce((s,i)=>s+Number(i.amount),0) }))} height={160}/>
+          </ChartCard>
+        </div>
+      )}
       {properties.length===0 && <div style={{ color:"#4b5563",fontSize:"0.9rem",padding:"2rem 0",textAlign:"center" }}>No properties yet.</div>}
       <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:"1rem" }}>
         {properties.map(p=>{
@@ -1106,6 +1353,22 @@ function Tenants({ tenants, properties, viewingAs, onAdd, onUpdate, onDelete }) 
         <span style={{ fontSize:"0.75rem",color:"#6b7280",fontWeight:600,textTransform:"uppercase",letterSpacing:"0.06em" }}>{filtered.length} shown</span>
         <span style={{ fontFamily:"'DM Mono',monospace",fontSize:"0.9rem",fontWeight:700,color:"#4a7c59" }}>{fmt(totalLeaseIncome)} lease income</span>
       </div>
+
+      {/* Tenant charts */}
+      {tenants.length>0 && (
+        <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:"1.25rem",marginBottom:"1.25rem" }}>
+          <ChartCard title="Lease Income by Property">
+            <HBarChart data={properties.map(p=>({ label:p.name, value:tenants.filter(t=>t.propertyId===p.id&&leaseStatus(t.leaseStart,t.leaseEnd)==="active").reduce((s,t)=>s+leaseTotalRent(t),0), color:p.color })).filter(d=>d.value>0)} colorKey="color" valueKey="value" labelKey="label"/>
+          </ChartCard>
+          <ChartCard title="Lease Status">
+            <DonutChart size={130} thickness={22} data={[
+              { label:"Active", value:tenants.filter(t=>leaseStatus(t.leaseStart,t.leaseEnd)==="active").length, color:"#4a7c59" },
+              { label:"Expiring Soon", value:tenants.filter(t=>leaseStatus(t.leaseStart,t.leaseEnd)==="expiring").length, color:"#b45309" },
+              { label:"Expired", value:tenants.filter(t=>leaseStatus(t.leaseStart,t.leaseEnd)==="expired").length, color:"#9b1c1c" },
+            ].filter(d=>d.value>0)}/>
+          </ChartCard>
+        </div>
+      )}
       {filtered.length===0 && <div style={{ color:"#4b5563",fontSize:"0.9rem",padding:"2rem 0",textAlign:"center" }}>No tenants match this filter.</div>}
       <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:"1rem" }}>
         {filtered.map(t=>{
@@ -1394,6 +1657,17 @@ function Vendors({ vendors, isAdmin, invoices, properties, projects, onAdd, onUp
 
       <VendorDropZone onConfirm={f=>onAdd(f)}/>
 
+      {vendors.length>0 && (
+        <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:"1.25rem",marginBottom:"1.5rem" }}>
+          <ChartCard title="Top Vendors by Total Spend">
+            <HBarChart data={vendors.map(v=>({ label:v.name, value:invoices.filter(i=>i.vendorId===v.id).reduce((s,i)=>s+Number(i.amount),0), color:"#e07b39" })).filter(d=>d.value>0).sort((a,b)=>b.value-a.value).slice(0,8)} colorKey="color" valueKey="value" labelKey="label"/>
+          </ChartCard>
+          <ChartCard title="Spend by Category">
+            <DonutChart size={130} thickness={22} data={CATEGORIES.map((cat,i)=>({ label:cat, value:invoices.filter(inv=>inv.category===cat).reduce((s,i)=>s+Number(i.amount),0), color:["#e07b39","#3b6fa0","#4a7c59","#8b5cf6","#0891b2","#d946a8","#b45309","#e11d48","#34d399","#f87171","#60a5fa","#a78bfa","#fbbf24","#6b7280","#94a3b8"][i%15] })).filter(d=>d.value>0).sort((a,b)=>b.value-a.value).slice(0,7)}/>
+          </ChartCard>
+        </div>
+      )}
+
       {vendors.length===0 && <div style={{ color:"#4b5563",fontSize:"0.9rem",padding:"2rem 0",textAlign:"center" }}>No vendors yet.</div>}
       {grouped.map(g=>(
         <div key={g.cat} style={{ marginBottom:"1.5rem" }}>
@@ -1500,6 +1774,17 @@ function Invoices({ invoices, properties, vendors, projects, viewingAs, isAdmin,
       </div>
 
       {!readOnly && <InvoiceDropZone vendors={vendors} properties={properties} projects={projects||[]} onConfirm={f=>onAdd(f)}/>}
+
+      {invoices.length>0 && (
+        <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:"1.25rem",marginBottom:"1.25rem" }}>
+          <ChartCard title="Monthly Spend Trend">
+            <SparkLine invoices={filtered} months={12} color="#e07b39" height={85}/>
+          </ChartCard>
+          <ChartCard title="Spend by Category">
+            <HBarChart data={CATEGORIES.map((cat,i)=>({ label:cat, value:filtered.filter(inv=>inv.category===cat).reduce((s,i)=>s+Number(i.amount),0), color:["#e07b39","#3b6fa0","#4a7c59","#8b5cf6","#0891b2","#d946a8","#b45309","#e11d48","#34d399","#f87171","#60a5fa","#a78bfa","#fbbf24","#6b7280","#94a3b8"][i%15] })).filter(d=>d.value>0).sort((a,b)=>b.value-a.value).slice(0,8)} colorKey="color" valueKey="value" labelKey="label"/>
+          </ChartCard>
+        </div>
+      )}
 
       <div style={{ background:"#14181f",border:"1px solid #1e2430",borderRadius:"12px",overflow:"hidden" }}>
         <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",padding:"0.75rem 1.25rem",borderBottom:"1px solid #1e2430",background:"#0d1117" }}>
