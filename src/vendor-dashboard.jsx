@@ -627,42 +627,90 @@ function DonutChart({ data, size=160, thickness=28 }) {
   );
 }
 
-// Sparkline / area chart — monthly trend
-function SparkLine({ invoices, months=12, color="#e07b39", height=80 }) {
+// Sparkline / area chart — monthly trend, supports optional second line
+function SparkLine({ invoices, tenants, months=12, color="#e07b39", height=80 }) {
   const now = new Date();
   const buckets = Array.from({length:months},(_,i)=>{
     const d = new Date(now.getFullYear(),now.getMonth()-months+1+i,1);
-    return { label:`${d.toLocaleString("default",{month:"short"})} ${d.getFullYear().toString().slice(2)}`, year:d.getFullYear(), month:d.getMonth(), total:0 };
+    return { label:`${d.toLocaleString("default",{month:"short"})} ${d.getFullYear().toString().slice(2)}`, year:d.getFullYear(), month:d.getMonth(), expense:0, income:0 };
   });
-  invoices.forEach(inv=>{
+
+  // Expenses — from invoices by date
+  (invoices||[]).forEach(inv=>{
     const d = new Date(inv.date);
     const b = buckets.find(b=>b.year===d.getFullYear()&&b.month===d.getMonth());
-    if (b) b.total += Number(inv.amount)||0;
+    if (b) b.expense += Number(inv.amount)||0;
   });
-  const max = Math.max(...buckets.map(b=>b.total),1);
+
+  // Income — spread each active lease's monthly rent across the months it covers
+  if (tenants) {
+    tenants.forEach(t=>{
+      if (!t.monthlyRent||!t.leaseStart||!t.leaseEnd) return;
+      const start = new Date(t.leaseStart);
+      const end = new Date(t.leaseEnd);
+      buckets.forEach(b=>{
+        const bDate = new Date(b.year, b.month, 1);
+        const bEnd  = new Date(b.year, b.month+1, 0);
+        if (bDate <= end && bEnd >= start) b.income += Number(t.monthlyRent)||0;
+      });
+    });
+  }
+
+  const showIncome = !!tenants;
+  const max = Math.max(...buckets.flatMap(b=>showIncome?[b.expense,b.income]:[b.expense]),1);
   const w = 600; const h = height;
-  const pts = buckets.map((b,i)=>({ x:i/(months-1)*(w-32)+16, y:h-8-((b.total/max)*(h-24)) }));
-  const path = pts.map((p,i)=>i===0?`M${p.x},${p.y}`:`L${p.x},${p.y}`).join(" ");
-  const area = `${path} L${pts[pts.length-1].x},${h-8} L${pts[0].x},${h-8} Z`;
+
+  function pts(key) {
+    return buckets.map((b,i)=>({ x:i/(months-1)*(w-32)+16, y:h-16-((b[key]||0)/max*(h-28)) }));
+  }
+  function pathStr(points) { return points.map((p,i)=>i===0?`M${p.x},${p.y}`:`L${p.x},${p.y}`).join(" "); }
+  function areaStr(points) { return `${pathStr(points)} L${points[points.length-1].x},${h-16} L${points[0].x},${h-16} Z`; }
+
+  const expPts = pts("expense");
+  const incPts = showIncome ? pts("income") : [];
+
   return (
-    <div style={{ overflowX:"auto" }}>
-      <svg viewBox={`0 0 ${w} ${h}`} width="100%" height={h} preserveAspectRatio="none" style={{ display:"block" }}>
-        <defs>
-          <linearGradient id="spark-grad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={color} stopOpacity="0.3"/>
-            <stop offset="100%" stopColor={color} stopOpacity="0.02"/>
-          </linearGradient>
-        </defs>
-        <path d={area} fill="url(#spark-grad)"/>
-        <path d={path} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round"/>
-        {pts.map((p,i)=>(
-          <circle key={i} cx={p.x} cy={p.y} r="3" fill={color} opacity={buckets[i].total>0?0.9:0}/>
-        ))}
-        {/* X labels — show every other month to avoid crowding */}
-        {buckets.map((b,i)=>i%2===0&&(
-          <text key={i} x={pts[i].x} y={h} textAnchor="middle" fontSize="8" fill="#4b5563" fontFamily="DM Sans,sans-serif">{b.label}</text>
-        ))}
-      </svg>
+    <div>
+      <div style={{ overflowX:"auto" }}>
+        <svg viewBox={`0 0 ${w} ${h}`} width="100%" height={h} preserveAspectRatio="none" style={{ display:"block" }}>
+          <defs>
+            <linearGradient id="grad-exp" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#e07b39" stopOpacity="0.25"/>
+              <stop offset="100%" stopColor="#e07b39" stopOpacity="0.02"/>
+            </linearGradient>
+            <linearGradient id="grad-inc" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#4a7c59" stopOpacity="0.25"/>
+              <stop offset="100%" stopColor="#4a7c59" stopOpacity="0.02"/>
+            </linearGradient>
+          </defs>
+          {/* Grid lines */}
+          {[0.25,0.5,0.75,1].map(pct=>(
+            <line key={pct} x1={16} x2={w-16} y1={h-16-(pct*(h-28))} y2={h-16-(pct*(h-28))} stroke="#1e2430" strokeWidth="1"/>
+          ))}
+          {/* Expense area + line */}
+          <path d={areaStr(expPts)} fill="url(#grad-exp)"/>
+          <path d={pathStr(expPts)} fill="none" stroke="#e07b39" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round"/>
+          {expPts.map((p,i)=>(
+            <circle key={i} cx={p.x} cy={p.y} r="3" fill="#e07b39" opacity={buckets[i].expense>0?0.9:0}/>
+          ))}
+          {/* Income area + line */}
+          {showIncome && <>
+            <path d={areaStr(incPts)} fill="url(#grad-inc)"/>
+            <path d={pathStr(incPts)} fill="none" stroke="#4a7c59" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round"/>
+            {incPts.map((p,i)=>(
+              <circle key={i} cx={p.x} cy={p.y} r="3" fill="#4a7c59" opacity={buckets[i].income>0?0.9:0}/>
+            ))}
+          </>}
+          {/* X labels */}
+          {buckets.map((b,i)=>i%2===0&&(
+            <text key={i} x={expPts[i].x} y={h-1} textAnchor="middle" fontSize="8" fill="#4b5563" fontFamily="DM Sans,sans-serif">{b.label}</text>
+          ))}
+        </svg>
+      </div>
+      <div style={{ display:"flex",gap:"1rem",marginTop:"6px" }}>
+        <div style={{ display:"flex",alignItems:"center",gap:"5px",fontSize:"0.72rem",color:"#6b7280" }}><span style={{ width:"10px",height:"2px",background:"#e07b39",display:"inline-block",borderRadius:"99px" }}/>Expenses</div>
+        {showIncome && <div style={{ display:"flex",alignItems:"center",gap:"5px",fontSize:"0.72rem",color:"#6b7280" }}><span style={{ width:"10px",height:"2px",background:"#4a7c59",display:"inline-block",borderRadius:"99px" }}/>Income</div>}
+      </div>
     </div>
   );
 }
@@ -721,8 +769,8 @@ function Dashboard({ properties, invoices, vendors, tenants, projects, isAdmin, 
         ))}
       </div>
 
-      <ChartCard title="Monthly Spend — Last 12 Months" style={{ marginBottom:"1.25rem" }}>
-        <SparkLine invoices={invoices} months={12} color="#e07b39" height={90}/>
+      <ChartCard title="Monthly Spend vs. Income — Last 12 Months" style={{ marginBottom:"1.25rem" }}>
+        <SparkLine invoices={invoices} tenants={tenants} months={12} height={100}/>
       </ChartCard>
 
       <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:"1.25rem",marginBottom:"1.25rem" }}>
