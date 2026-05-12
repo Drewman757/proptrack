@@ -2455,7 +2455,7 @@ function ProjectDetail({ project, projects, vendors, properties, invoices, readO
           </div>
           <div style={{ display:"flex",gap:"0.5rem",alignItems:"center" }}>
             <Badge color={color} label={live.status}/>
-            {!readOnly&&<BtnSecondary onClick={()=>setShowEditModal(true)}><Icon name="wrench" size={13}/>Edit</BtnSecondary>}
+            <BtnSecondary onClick={()=>setShowEditModal(true)}><Icon name="wrench" size={13}/>Edit</BtnSecondary>
           </div>
         </div>
         {live.description&&<p style={{ margin:"0 0 1rem",fontSize:"0.85rem",color:"#94a3b8",lineHeight:1.5 }}>{live.description}</p>}
@@ -2549,7 +2549,7 @@ function ProjectDetail({ project, projects, vendors, properties, invoices, readO
         </Modal>
       )}
 
-      {showEditModal&&!readOnly&&(
+      {showEditModal&&(
         <Modal title="Edit Project" onClose={()=>setShowEditModal(false)} wide>
           <Field label="Project Name"><input style={inputStyle} value={live.name} onChange={e=>onUpdate({...live,name:e.target.value})}/></Field>
           <Field label="Description"><textarea style={{...inputStyle,resize:"vertical",minHeight:"60px"}} value={live.description||""} onChange={e=>onUpdate({...live,description:e.target.value})}/></Field>
