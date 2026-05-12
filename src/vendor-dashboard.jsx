@@ -2314,8 +2314,8 @@ function Projects({ projects, properties, vendors, invoices, viewingAs, isAdmin,
 
       {filtered.length===0 && <div style={{ background:"#14181f",border:"1px dashed #2a2f3d",borderRadius:"12px",padding:"3rem",textAlign:"center",color:"#4b5563",fontSize:"0.9rem" }}>{projects.length===0?"No projects yet.":"No projects match this filter."}</div>}
 
-      <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:"1rem" }}>
-        {filtered.map(p=>{
+      {filtered.length>0&&(()=>{
+        function ProjectCard({p}) {
           const prop = properties.find(pr=>pr.id===p.propertyId);
           const tasks = p.tasks||[]; const done = tasks.filter(t=>t.status==="done").length;
           const pct = tasks.length>0?Math.round((done/tasks.length)*100):0;
@@ -2323,7 +2323,7 @@ function Projects({ projects, properties, vendors, invoices, viewingAs, isAdmin,
           const budget = tasks.reduce((s,t)=>s+Number(t.budget||0),0);
           const actual = tasks.reduce((s,t)=>s+Number(t.actual||0),0);
           return (
-            <div key={p.id} onClick={()=>setView(p.id)} style={{ background:"#14181f",border:"1px solid #1e2430",borderRadius:"12px",padding:"1.25rem",cursor:"pointer",borderTop:`3px solid ${color}` }}>
+            <div key={p.id} onClick={()=>setView(p.id)} style={{ background:"#14181f",border:"1px solid #1e2430",borderRadius:"12px",padding:"1.25rem",cursor:"pointer",borderTop:`3px solid ${color}`,marginBottom:"0.75rem" }}>
               <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"0.5rem" }}>
                 <div style={{ fontWeight:700,fontSize:"0.98rem",color:"#e8eaf0",flex:1,paddingRight:"0.5rem" }}>{p.name}</div>
                 <Badge color={color} label={p.status}/>
@@ -2341,8 +2341,46 @@ function Projects({ projects, properties, vendors, invoices, viewingAs, isAdmin,
               {isAdmin&&p.ownerName&&<div style={{ marginTop:"0.5rem" }}><OwnerTag email={p.ownerEmail} name={p.ownerName}/></div>}
             </div>
           );
-        })}
-      </div>
+        }
+        const isUtilities = p => /utilit/i.test(p.name);
+        const isHOA = p => /hoa|tax|insurance/i.test(p.name);
+        const isMaint = p => !isUtilities(p) && !isHOA(p) && !/remodel|renovati|addition|construc/i.test(p.name);
+        const isRemodel = p => /remodel|renovati|addition|construc/i.test(p.name);
+        const col1 = filtered.filter(isUtilities);
+        const col2 = filtered.filter(isMaint);
+        const col3 = filtered.filter(isHOA);
+        const col4 = filtered.filter(isRemodel);
+        const ColHeader = ({label,accent}) => (
+          <div style={{ fontSize:"0.65rem",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.08em",color:accent,borderBottom:`1px solid ${accent}33`,paddingBottom:"0.4rem",marginBottom:"0.75rem" }}>{label}</div>
+        );
+        return (
+          <div style={{ display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:"1rem",alignItems:"start" }}>
+            <div>
+              <ColHeader label="Utilities" accent="#0891b2"/>
+              {col1.map(p=><ProjectCard key={p.id} p={p}/>)}
+              {col1.length===0&&<div style={{ fontSize:"0.78rem",color:"#374151",fontStyle:"italic" }}>None</div>}
+            </div>
+            <div>
+              <ColHeader label="Maintenance" accent="#e07b39"/>
+              {col2.map(p=><ProjectCard key={p.id} p={p}/>)}
+              {col2.length===0&&<div style={{ fontSize:"0.78rem",color:"#374151",fontStyle:"italic" }}>None</div>}
+            </div>
+            <div>
+              <ColHeader label="HOA / Taxes / Insurance" accent="#4a7c59"/>
+              {col3.map(p=><ProjectCard key={p.id} p={p}/>)}
+              {col3.length===0&&<div style={{ fontSize:"0.78rem",color:"#374151",fontStyle:"italic" }}>None</div>}
+            </div>
+            {col4.length>0&&(
+              <div style={{ gridColumn:"1/-1" }}>
+                <ColHeader label="Remodeling & Renovations" accent="#8b5cf6"/>
+                <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:"0.75rem" }}>
+                  {col4.map(p=><ProjectCard key={p.id} p={p}/>)}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {showModal && !readOnly && (
         <Modal title="New Project" onClose={()=>setShowModal(false)} wide>
