@@ -525,7 +525,7 @@ function InvoiceDropZone({ vendors, properties, projects, onConfirm }) {
 // ─── Chart Components ─────────────────────────────────────────────────────────
 
 // Horizontal bar chart — shows multiple items ranked by value
-function HBarChart({ data, colorKey="color", valueKey="value", labelKey="label", height=220, formatVal=fmt }) {
+function HBarChart({ data, colorKey="color", valueKey="value", labelKey="label", formatVal=fmt }) {
   if (!data||data.length===0) return <div style={{ color:"#4b5563",fontSize:"0.85rem",padding:"1rem 0" }}>No data yet.</div>;
   const max = Math.max(...data.map(d=>d[valueKey]||0), 1);
   return (
@@ -533,8 +533,8 @@ function HBarChart({ data, colorKey="color", valueKey="value", labelKey="label",
       {data.map((d,i)=>(
         <div key={i}>
           <div style={{ display:"flex",justifyContent:"space-between",marginBottom:"4px" }}>
-            <span style={{ fontSize:"0.78rem",color:"#cbd5e1",fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"65%" }}>{d[labelKey]}</span>
-            <span style={{ fontSize:"0.78rem",color:"#e8eaf0",fontFamily:"'DM Mono',monospace",fontWeight:600,flexShrink:0 }}>{formatVal(d[valueKey]||0)}</span>
+            <span style={{ fontSize:"0.78rem",color:"#cbd5e1",fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"60%" }}>{d[labelKey]}</span>
+            <span style={{ fontSize:"0.78rem",color:"#e8eaf0",fontFamily:"'DM Mono',monospace",fontWeight:700,flexShrink:0 }}>{formatVal(d[valueKey]||0)}</span>
           </div>
           <div style={{ height:"8px",background:"#1e2430",borderRadius:"99px",overflow:"hidden" }}>
             <div style={{ height:"100%",width:`${Math.max(2,(d[valueKey]||0)/max*100)}%`,background:d[colorKey]||"#e07b39",borderRadius:"99px",transition:"width 0.6s ease" }}/>
@@ -549,28 +549,36 @@ function HBarChart({ data, colorKey="color", valueKey="value", labelKey="label",
 function GroupedBarChart({ data, height=180 }) {
   if (!data||data.length===0) return <div style={{ color:"#4b5563",fontSize:"0.85rem",padding:"1rem 0" }}>No data yet.</div>;
   const max = Math.max(...data.flatMap(d=>[d.income||0,d.expense||0]),1);
-  const barW = Math.max(18, Math.min(40, Math.floor(340/data.length/2)-4));
+  const barW = Math.max(18, Math.min(40, Math.floor(300/data.length/2)-4));
   const gap = barW*0.5;
-  const totalW = data.length*(barW*2+gap)+(data.length-1)*16;
+  const leftPad = 44;
+  const totalW = leftPad + data.length*(barW*2+gap)+(data.length-1)*16 + 16;
   const chartH = height-40;
+  const yTicks = [0.25,0.5,0.75,1];
   return (
     <div style={{ overflowX:"auto" }}>
-      <svg width={Math.max(totalW+32,300)} height={height} style={{ display:"block" }}>
-        {/* Grid lines */}
-        {[0,0.25,0.5,0.75,1].map(pct=>(
-          <line key={pct} x1={16} x2={Math.max(totalW+32,300)-8} y1={8+chartH*(1-pct)} y2={8+chartH*(1-pct)} stroke="#1e2430" strokeWidth="1"/>
-        ))}
+      <svg width={Math.max(totalW,300)} height={height} style={{ display:"block" }}>
+        {/* Y-axis ticks */}
+        {yTicks.map(pct=>{
+          const y = 8+chartH*(1-pct);
+          const val = max*pct;
+          return (
+            <g key={pct}>
+              <line x1={leftPad} x2={Math.max(totalW,300)-8} y1={y} y2={y} stroke="#1e2430" strokeWidth="1"/>
+              <text x={leftPad-4} y={y+3} textAnchor="end" fontSize="8" fill="#4b5563" fontFamily="DM Mono,monospace">
+                {val>=1000?`$${Math.round(val/1000)}k`:`$${Math.round(val)}`}
+              </text>
+            </g>
+          );
+        })}
         {data.map((d,i)=>{
-          const x = 16+i*(barW*2+gap+16);
+          const x = leftPad+i*(barW*2+gap+16);
           const ih = Math.max(2,((d.income||0)/max)*chartH);
           const eh = Math.max(2,((d.expense||0)/max)*chartH);
           return (
             <g key={i}>
-              {/* Income bar */}
               <rect x={x} y={8+chartH-ih} width={barW} height={ih} fill="#4a7c59" rx="3" opacity="0.85"/>
-              {/* Expense bar */}
               <rect x={x+barW+3} y={8+chartH-eh} width={barW} height={eh} fill="#e07b39" rx="3" opacity="0.85"/>
-              {/* Label */}
               <text x={x+barW} y={height-4} textAnchor="middle" fontSize="9" fill="#6b7280" fontFamily="DM Sans,sans-serif">
                 {d.name?.split(" ")[0]||""}
               </text>
@@ -669,6 +677,9 @@ function SparkLine({ invoices, tenants, months=12, color="#e07b39", height=80 })
   const expPts = pts("expense");
   const incPts = showIncome ? pts("income") : [];
 
+  // Y-axis labels — 4 ticks
+  const yTicks = [0.25,0.5,0.75,1].map(pct=>({ pct, value:max*pct, y:h-16-(pct*(h-28)) }));
+
   return (
     <div>
       <div style={{ overflowX:"auto" }}>
@@ -683,9 +694,14 @@ function SparkLine({ invoices, tenants, months=12, color="#e07b39", height=80 })
               <stop offset="100%" stopColor="#4a7c59" stopOpacity="0.02"/>
             </linearGradient>
           </defs>
-          {/* Grid lines */}
-          {[0.25,0.5,0.75,1].map(pct=>(
-            <line key={pct} x1={16} x2={w-16} y1={h-16-(pct*(h-28))} y2={h-16-(pct*(h-28))} stroke="#1e2430" strokeWidth="1"/>
+          {/* Grid lines + Y-axis labels */}
+          {yTicks.map(t=>(
+            <g key={t.pct}>
+              <line x1={56} x2={w-8} y1={t.y} y2={t.y} stroke="#1e2430" strokeWidth="1"/>
+              <text x={52} y={t.y+3} textAnchor="end" fontSize="8" fill="#4b5563" fontFamily="DM Mono,monospace">
+                {t.value>=1000?`$${Math.round(t.value/1000)}k`:`$${Math.round(t.value)}`}
+              </text>
+            </g>
           ))}
           {/* Expense area + line — only if invoices provided */}
           {(invoices||[]).some(i=>i.amount>0) && <>
