@@ -1737,7 +1737,7 @@ function VendorDetail({ vendor, invoices, properties, projects, isAdmin, onUpdat
   const [form, setForm] = useState({...vendor});
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-  const allVendorInvoices = invoices.filter(i=>i.vendorId===vendor.id).sort((a,b)=>new Date(a.date)-new Date(b.date));
+  const allVendorInvoices = invoices.filter(i=>i.vendorId===vendor.id).sort((a,b)=>new Date(b.date)-new Date(a.date));
   const hasDateFilter = !!(dateFrom||dateTo);
   const vendorInvoices = allVendorInvoices.filter(i=>{
     if (dateFrom&&i.date&&i.date<dateFrom) return false;
