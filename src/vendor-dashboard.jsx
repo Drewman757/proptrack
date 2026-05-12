@@ -1732,9 +1732,26 @@ function VendorDropZone({ onConfirm }) {
 }
 
 // ─── Vendor Detail View ───────────────────────────────────────────────────────
-function VendorDetail({ vendor, invoices, properties, projects, isAdmin, onUpdate, onDelete, onBack }) {
+function VendorDetail({ vendor, invoices, properties, projects, isAdmin, onUpdate, onDelete, onUpdateInvoice, onBack }) {
   const [editModal, setEditModal] = useState(false);
   const [form, setForm] = useState({...vendor});
+  const [editingInvoice, setEditingInvoice] = useState(null);
+  const [invForm, setInvForm] = useState(null);
+  const [pendingFile, setPendingFile] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef();
+
+  function openInvoiceEdit(inv) { setInvForm({...inv}); setEditingInvoice(inv); setPendingFile(null); }
+  async function saveInvoice() {
+    if (!onUpdateInvoice) return;
+    setUploading(true);
+    let finalForm = {...invForm};
+    if (pendingFile) {
+      try { const uploaded = await uploadFile(pendingFile, "invoices"); finalForm.fileName = uploaded.name; finalForm.fileUrl = uploaded.url; finalForm.filePath = uploaded.path; } catch(e) { console.error("Upload failed", e); }
+    }
+    await onUpdateInvoice(finalForm);
+    setUploading(false); setEditingInvoice(null); setInvForm(null); setPendingFile(null);
+  }
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const allVendorInvoices = invoices.filter(i=>i.vendorId===vendor.id).sort((a,b)=>new Date(b.date)-new Date(a.date));
@@ -1835,7 +1852,8 @@ function VendorDetail({ vendor, invoices, properties, projects, isAdmin, onUpdat
             const proj = projects.find(p=>p.id===inv.projectId);
             const rec = RECURRING_OPTIONS.find(r=>r.value===inv.recurring)||RECURRING_OPTIONS[0];
             return (
-              <div key={inv.id} style={{ display:"flex",alignItems:"center",padding:"0.85rem 1.25rem",borderBottom:idx<vendorInvoices.length-1?"1px solid #1a1f2b":"none" }}>
+              <div key={inv.id} onClick={()=>onUpdateInvoice&&openInvoiceEdit(inv)} style={{ display:"flex",alignItems:"center",padding:"0.85rem 1.25rem",borderBottom:idx<vendorInvoices.length-1?"1px solid #1a1f2b":"none",cursor:onUpdateInvoice?"pointer":"default" }}
+                onMouseEnter={e=>onUpdateInvoice&&(e.currentTarget.style.background="#1a1f2b")} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
                 <div style={{ width:"4px",height:"36px",borderRadius:"99px",background:prop?.color||"#6b7280",marginRight:"1rem",flexShrink:0 }}/>
                 <div style={{ flex:1,minWidth:0 }}>
                   <div style={{ display:"flex",alignItems:"center",gap:"0.5rem",marginBottom:"0.2rem",flexWrap:"wrap" }}>
@@ -1855,6 +1873,63 @@ function VendorDetail({ vendor, invoices, properties, projects, isAdmin, onUpdat
         </div>
       )}
 
+      {editingInvoice && invForm && onUpdateInvoice && (
+        <Modal title="Edit Invoice" onClose={()=>{setEditingInvoice(null);setInvForm(null);setPendingFile(null);}} wide>
+          <Grid2>
+            <Field label="Property"><select style={inputStyle} value={invForm.propertyId||""} onChange={e=>setInvForm(f=>({...f,propertyId:e.target.value}))}><option value="">Select…</option>{properties.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></Field>
+            <Field label="Category"><select style={inputStyle} value={invForm.category} onChange={e=>setInvForm(f=>({...f,category:e.target.value}))}>{CATEGORIES.map(c=><option key={c}>{c}</option>)}</select></Field>
+          </Grid2>
+          <Grid2>
+            <Field label="Amount ($)"><input style={inputStyle} type="number" value={invForm.amount} onChange={e=>setInvForm(f=>({...f,amount:e.target.value}))} placeholder="0.00"/></Field>
+            <Field label="Date"><input style={inputStyle} type="date" value={invForm.date} onChange={e=>setInvForm(f=>({...f,date:e.target.value}))}/></Field>
+          </Grid2>
+          <Grid2>
+            <Field label="Invoice #"><input style={inputStyle} value={invForm.invoiceNumber||""} onChange={e=>setInvForm(f=>({...f,invoiceNumber:e.target.value}))} placeholder="e.g. INV-0042"/></Field>
+            <Field label="Description"><input style={inputStyle} value={invForm.description||""} onChange={e=>setInvForm(f=>({...f,description:e.target.value}))} placeholder="Brief description…"/></Field>
+          </Grid2>
+          <Field label="Recurring">
+            <div style={{ display:"flex",gap:"0.5rem",flexWrap:"wrap" }}>
+              {RECURRING_OPTIONS.map(r=>(
+                <button key={r.value} onClick={()=>setInvForm(f=>({...f,recurring:r.value}))}
+                  style={{ flex:1,padding:"0.45rem 0.5rem",borderRadius:"7px",border:`1px solid ${invForm.recurring===r.value?r.color:"#2a2f3d"}`,background:invForm.recurring===r.value?r.color+"22":"#0d1117",color:invForm.recurring===r.value?r.color:"#6b7280",cursor:"pointer",fontSize:"0.78rem",fontWeight:invForm.recurring===r.value?700:400,textAlign:"center",whiteSpace:"nowrap" }}>
+                  {r.value!=="one-time"&&"↻ "}{r.label}
+                </button>
+              ))}
+            </div>
+          </Field>
+          <Field label="Project">
+            <select style={inputStyle} value={invForm.projectId||""} onChange={e=>setInvForm(f=>({...f,projectId:e.target.value}))}>
+              <option value="">— No project —</option>
+              {projects.filter(p=>!invForm.propertyId||p.propertyId===invForm.propertyId).map(p=>{const prop=properties.find(x=>x.id===p.propertyId);return <option key={p.id} value={p.id}>{p.name}{prop?` — ${prop.name}`:""}</option>;})}
+              {invForm.propertyId&&projects.filter(p=>p.propertyId!==invForm.propertyId).length>0&&<><option disabled>── Other properties ──</option>{projects.filter(p=>p.propertyId!==invForm.propertyId).map(p=>{const prop=properties.find(x=>x.id===p.propertyId);return <option key={p.id} value={p.id}>{p.name}{prop?` — ${prop.name}`:""}</option>;})}</>}
+            </select>
+          </Field>
+          <SectionDivider label="Attachment"/>
+          <input ref={fileRef} type="file" accept=".pdf,.jpg,.jpeg,.png" style={{ display:"none" }}
+            onChange={e=>{ const f=e.target.files[0]; if(f){ setPendingFile(f); setInvForm(ff=>({...ff,fileName:f.name})); } e.target.value=""; }}/>
+          {(pendingFile||invForm.fileUrl) ? (
+            <div style={{ background:"#0d1117",border:"1px solid #2a2f3d",borderRadius:"8px",padding:"0.65rem 1rem",display:"flex",alignItems:"center",gap:"0.75rem",marginBottom:"0.5rem" }}>
+              <Icon name="file" size={14}/>
+              <div style={{ flex:1,minWidth:0 }}>
+                <div style={{ fontSize:"0.82rem",color:"#e8eaf0",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{pendingFile?pendingFile.name:invForm.fileName||"Attached file"}</div>
+                {pendingFile&&<div style={{ fontSize:"0.68rem",color:"#b45309",marginTop:"1px" }}>Pending — will upload on save</div>}
+                {!pendingFile&&invForm.fileUrl&&<a href={invForm.fileUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize:"0.68rem",color:"#3b6fa0",textDecoration:"none" }}>View current file ↗</a>}
+              </div>
+              <div style={{ display:"flex",gap:"0.4rem",flexShrink:0 }}>
+                <button onClick={()=>fileRef.current?.click()} style={{ fontSize:"0.72rem",padding:"3px 8px",borderRadius:"5px",border:"1px solid #2a2f3d",background:"#1e2430",color:"#94a3b8",cursor:"pointer" }}>Replace</button>
+                <button onClick={()=>{ setPendingFile(null); setInvForm(f=>({...f,fileName:null,fileUrl:null,filePath:null})); }} style={{ fontSize:"0.72rem",padding:"3px 8px",borderRadius:"5px",border:"1px solid #3d1515",background:"#1c0808",color:"#f87171",cursor:"pointer" }}>Remove</button>
+              </div>
+            </div>
+          ) : (
+            <div onClick={()=>fileRef.current?.click()} style={{ width:"100%",background:"#0d1117",border:"1px dashed #2a2f3d",borderRadius:"8px",padding:"0.65rem",color:"#6b7280",cursor:"pointer",fontSize:"0.82rem",display:"flex",alignItems:"center",justifyContent:"center",gap:"0.5rem",marginBottom:"0.5rem" }}>
+              <Icon name="upload" size={13}/>Attach PDF or image
+            </div>
+          )}
+          <div style={{ display:"flex",gap:"0.75rem",justifyContent:"flex-end",marginTop:"0.5rem" }}>
+            <BtnPrimary onClick={saveInvoice} disabled={uploading}>{uploading&&<Spinner/>}{uploading?"Uploading…":"Save Invoice"}</BtnPrimary>
+          </div>
+        </Modal>
+      )}
       {editModal && (
         <Modal title="Edit Vendor" onClose={()=>setEditModal(false)}>
           <Field label="Vendor Name"><input style={inputStyle} value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="Business name"/></Field>
@@ -1875,7 +1950,7 @@ function VendorDetail({ vendor, invoices, properties, projects, isAdmin, onUpdat
 }
 
 // ─── Vendors (shared) ─────────────────────────────────────────────────────────
-function Vendors({ vendors, isAdmin, invoices, properties, projects, onAdd, onUpdate, onDelete }) {
+function Vendors({ vendors, isAdmin, invoices, properties, projects, onAdd, onUpdate, onDelete, onUpdateInvoice }) {
   const [selectedVendor, setSelectedVendor] = useState(null);
   const [modal, setModal] = useState(null);
   const blank = { name:"",category:CATEGORIES[0],phone:"",email:"",notes:"" };
@@ -1885,7 +1960,7 @@ function Vendors({ vendors, isAdmin, invoices, properties, projects, onAdd, onUp
   if (selectedVendor) {
     const live = vendors.find(v=>v.id===selectedVendor) || vendors[0];
     if (!live) { setSelectedVendor(null); return null; }
-    return <VendorDetail vendor={live} invoices={invoices} properties={properties} projects={projects||[]} isAdmin={isAdmin} onUpdate={onUpdate} onDelete={onDelete} onBack={()=>setSelectedVendor(null)}/>;
+    return <VendorDetail vendor={live} invoices={invoices} properties={properties} projects={projects||[]} isAdmin={isAdmin} onUpdate={onUpdate} onDelete={onDelete} onUpdateInvoice={onUpdateInvoice} onBack={()=>setSelectedVendor(null)}/>;
   }
 
   async function handleSave() {
@@ -2816,7 +2891,7 @@ export default function App() {
           {tab==="dashboard"   && <Dashboard properties={properties} invoices={invoices} vendors={vendors} tenants={tenants} projects={projects} isAdmin={isAdmin} viewingAs={viewingAs}/>}
           {tab==="properties"  && <Properties properties={properties} isAdmin={isAdmin} viewingAs={viewingAs} onAdd={addProperty} onUpdate={updateProperty} onDelete={deleteProperty} invoices={invoices} tenants={tenants} projects={projects} vendors={vendors}/>}
           {tab==="tenants"     && <Tenants tenants={tenants} properties={properties} viewingAs={viewingAs} onAdd={addTenant} onUpdate={updateTenant} onDelete={deleteTenant}/>}
-          {tab==="vendors"     && <Vendors vendors={vendors} isAdmin={isAdmin} invoices={invoices} properties={properties} projects={projects} onAdd={addVendor} onUpdate={updateVendor} onDelete={deleteVendor}/>}
+          {tab==="vendors"     && <Vendors vendors={vendors} isAdmin={isAdmin} invoices={invoices} properties={properties} projects={projects} onAdd={addVendor} onUpdate={updateVendor} onDelete={deleteVendor} onUpdateInvoice={updateInvoice}/>}
           {tab==="invoices"    && <Invoices invoices={invoices} properties={properties} vendors={vendors} projects={projects} viewingAs={viewingAs} isAdmin={isAdmin} onAdd={addInvoice} onUpdate={updateInvoice} onDelete={deleteInvoice}/>}
           {tab==="projects"    && <Projects projects={projects} properties={properties} vendors={vendors} invoices={invoices} viewingAs={viewingAs} isAdmin={isAdmin} onAdd={addProject} onUpdate={updateProject} onDelete={deleteProject} onAddInvoice={addInvoice} onUpdateInvoice={updateInvoice}/>}
           {tab==="members"     && isAdmin && <MembersTab profiles={profiles} currentUser={profile} onRoleChange={handleRoleChange}/>}
