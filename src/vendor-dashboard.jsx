@@ -687,12 +687,14 @@ function SparkLine({ invoices, tenants, months=12, color="#e07b39", height=80 })
           {[0.25,0.5,0.75,1].map(pct=>(
             <line key={pct} x1={16} x2={w-16} y1={h-16-(pct*(h-28))} y2={h-16-(pct*(h-28))} stroke="#1e2430" strokeWidth="1"/>
           ))}
-          {/* Expense area + line */}
-          <path d={areaStr(expPts)} fill="url(#grad-exp)"/>
-          <path d={pathStr(expPts)} fill="none" stroke="#e07b39" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round"/>
-          {expPts.map((p,i)=>(
-            <circle key={i} cx={p.x} cy={p.y} r="3" fill="#e07b39" opacity={buckets[i].expense>0?0.9:0}/>
-          ))}
+          {/* Expense area + line — only if invoices provided */}
+          {(invoices||[]).some(i=>i.amount>0) && <>
+            <path d={areaStr(expPts)} fill="url(#grad-exp)"/>
+            <path d={pathStr(expPts)} fill="none" stroke="#e07b39" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round"/>
+            {expPts.map((p,i)=>(
+              <circle key={i} cx={p.x} cy={p.y} r="3" fill="#e07b39" opacity={buckets[i].expense>0?0.9:0}/>
+            ))}
+          </>}
           {/* Income area + line */}
           {showIncome && <>
             <path d={areaStr(incPts)} fill="url(#grad-inc)"/>
@@ -708,7 +710,7 @@ function SparkLine({ invoices, tenants, months=12, color="#e07b39", height=80 })
         </svg>
       </div>
       <div style={{ display:"flex",gap:"1rem",marginTop:"6px" }}>
-        <div style={{ display:"flex",alignItems:"center",gap:"5px",fontSize:"0.72rem",color:"#6b7280" }}><span style={{ width:"10px",height:"2px",background:"#e07b39",display:"inline-block",borderRadius:"99px" }}/>Expenses</div>
+        {(invoices||[]).some(i=>i.amount>0) && <div style={{ display:"flex",alignItems:"center",gap:"5px",fontSize:"0.72rem",color:"#6b7280" }}><span style={{ width:"10px",height:"2px",background:"#e07b39",display:"inline-block",borderRadius:"99px" }}/>Expenses</div>}
         {showIncome && <div style={{ display:"flex",alignItems:"center",gap:"5px",fontSize:"0.72rem",color:"#6b7280" }}><span style={{ width:"10px",height:"2px",background:"#4a7c59",display:"inline-block",borderRadius:"99px" }}/>Income</div>}
       </div>
     </div>
@@ -1326,12 +1328,8 @@ function Tenants({ tenants, properties, viewingAs, onAdd, onUpdate, onDelete }) 
           <ChartCard title="Lease Income by Property">
             <HBarChart data={properties.map(p=>({ label:p.name, value:tenants.filter(t=>t.propertyId===p.id&&leaseStatus(t.leaseStart,t.leaseEnd)==="active").reduce((s,t)=>s+leaseTotalRent(t),0), color:p.color })).filter(d=>d.value>0)} colorKey="color" valueKey="value" labelKey="label"/>
           </ChartCard>
-          <ChartCard title="Lease Status">
-            <DonutChart size={130} thickness={22} data={[
-              { label:"Active", value:tenants.filter(t=>leaseStatus(t.leaseStart,t.leaseEnd)==="active").length, color:"#4a7c59" },
-              { label:"Expiring Soon", value:tenants.filter(t=>leaseStatus(t.leaseStart,t.leaseEnd)==="expiring").length, color:"#b45309" },
-              { label:"Expired", value:tenants.filter(t=>leaseStatus(t.leaseStart,t.leaseEnd)==="expired").length, color:"#9b1c1c" },
-            ].filter(d=>d.value>0)}/>
+          <ChartCard title="Monthly Income — Last 12 Months">
+            <SparkLine invoices={[]} tenants={tenants} months={12} height={100}/>
           </ChartCard>
         </div>
       )}
