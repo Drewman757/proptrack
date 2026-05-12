@@ -1422,6 +1422,241 @@ function Tenants({ tenants, properties, viewingAs, onAdd, onUpdate, onDelete }) 
   );
 }
 
+// ─── Bulk Invoice Upload ──────────────────────────────────────────────────────
+function BulkInvoiceUpload({ vendors, properties, projects, onConfirmAll, onClose }) {
+  // Each item: { id, file, status: 'queued'|'parsing'|'done'|'error', result, form, error }
+  const [items, setItems] = useState([]);
+  const [dragging, setDragging] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [savedCount, setSavedCount] = useState(0);
+  const [activeItem, setActiveItem] = useState(null); // id of item being edited
+  const inputRef = useRef();
+  const confidenceColor = { low:"#f87171", medium:"#fbbf24", high:"#4a7c59" };
+
+  function blankForm(result, file) {
+    return {
+      vendorId: result?.vendorId || "",
+      vendorNameRaw: result?.vendorNameRaw || "",
+      propertyId: result?.propertyId || (properties[0]?.id || ""),
+      projectId: result?.projectId || "",
+      amount: result?.amount != null ? String(result.amount) : "",
+      date: result?.date || new Date().toISOString().slice(0, 10),
+      category: CATEGORIES.includes(result?.category) ? result.category : CATEGORIES[0],
+      description: result?.description || "",
+      invoiceNumber: result?.invoiceNumber || "",
+      fileName: file.name,
+      recurring: "one-time",
+      fileObj: file,
+    };
+  }
+
+  async function processItem(id) {
+    setItems(prev => prev.map(it => it.id === id ? { ...it, status: "parsing" } : it));
+    const item = items.find(it => it.id === id) || null;
+    // get fresh reference from closure
+    setItems(prev => {
+      const it = prev.find(x => x.id === id);
+      if (!it) return prev;
+      parseInvoiceWithAI(it.file, vendors, properties, projects)
+        .then(result => {
+          setItems(p => p.map(x => x.id === id ? { ...x, status: "done", result, form: blankForm(result, it.file) } : x));
+        })
+        .catch(e => {
+          setItems(p => p.map(x => x.id === id ? { ...x, status: "error", error: e.message || "Failed to parse" } : x));
+        });
+      return prev;
+    });
+  }
+
+  async function addFiles(files) {
+    const newItems = Array.from(files).map(f => ({ id: uid(), file: f, status: "queued", result: null, form: null, error: null }));
+    setItems(prev => {
+      const all = [...prev, ...newItems];
+      // kick off parsing for newly added queued items
+      newItems.forEach(item => {
+        parseInvoiceWithAI(item.file, vendors, properties, projects)
+          .then(result => {
+            setItems(p => p.map(x => x.id === item.id ? { ...x, status: "done", result, form: blankForm(result, item.file) } : x));
+          })
+          .catch(e => {
+            setItems(p => p.map(x => x.id === item.id ? { ...x, status: "error", error: e.message || "Failed to parse" } : x));
+          });
+      });
+      return all.map(it => newItems.find(n => n.id === it.id) ? { ...it, status: "parsing" } : it);
+    });
+  }
+
+  function removeItem(id) { setItems(prev => prev.filter(x => x.id !== id)); }
+  function updateForm(id, patch) { setItems(prev => prev.map(x => x.id === id ? { ...x, form: { ...x.form, ...patch } } : x)); }
+
+  async function saveAll() {
+    const ready = items.filter(it => it.status === "done" && it.form);
+    if (!ready.length) return;
+    setSaving(true);
+    let count = 0;
+    for (const item of ready) {
+      try {
+        let finalForm = { ...item.form };
+        if (item.file) {
+          const uploaded = await uploadFile(item.file, "invoices");
+          finalForm.fileName = uploaded.name;
+          finalForm.fileUrl = uploaded.url;
+          finalForm.filePath = uploaded.path;
+        }
+        delete finalForm.fileObj;
+        await onConfirmAll(finalForm);
+        count++;
+        setSavedCount(count);
+        setItems(prev => prev.filter(x => x.id !== item.id));
+      } catch (e) {
+        setItems(prev => prev.map(x => x.id === item.id ? { ...x, status: "error", error: "Save failed: " + (e.message || "") } : x));
+      }
+    }
+    setSaving(false);
+    if (count === ready.length) onClose();
+  }
+
+  const doneCount = items.filter(it => it.status === "done").length;
+  const parsingCount = items.filter(it => it.status === "parsing").length;
+  const errorCount = items.filter(it => it.status === "error").length;
+
+  const activeItemData = activeItem ? items.find(x => x.id === activeItem) : null;
+
+  return (
+    <div style={{ position:"fixed",inset:0,background:"rgba(10,12,18,0.88)",zIndex:1500,display:"flex",alignItems:"center",justifyContent:"center",padding:"1rem" }}>
+      <div style={{ background:"#14181f",border:"1px solid #2a2f3d",borderRadius:"16px",width:"100%",maxWidth:"800px",maxHeight:"95vh",display:"flex",flexDirection:"column",boxShadow:"0 32px 80px rgba(0,0,0,0.7)" }}>
+        {/* Header */}
+        <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",padding:"1.25rem 1.5rem",borderBottom:"1px solid #1e2430",flexShrink:0 }}>
+          <div>
+            <h3 style={{ margin:0,fontSize:"1rem",fontWeight:700,color:"#e8eaf0" }}>Bulk Invoice Upload</h3>
+            <div style={{ fontSize:"0.72rem",color:"#6b7280",marginTop:"2px" }}>
+              {items.length === 0 ? "Drop multiple invoices to import them all at once" :
+                `${items.length} file${items.length!==1?"s":""} · ${parsingCount} parsing · ${doneCount} ready · ${errorCount} error${errorCount!==1?"s":""}`}
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background:"none",border:"none",color:"#6b7280",cursor:"pointer",padding:"4px",display:"flex" }}><Icon name="x" size={18}/></button>
+        </div>
+
+        {/* Drop zone */}
+        <div
+          onDrop={e=>{ e.preventDefault(); setDragging(false); if(e.dataTransfer.files.length) addFiles(e.dataTransfer.files); }}
+          onDragOver={e=>{ e.preventDefault(); setDragging(true); }}
+          onDragLeave={()=>setDragging(false)}
+          onClick={()=>inputRef.current?.click()}
+          style={{ margin:"1rem 1.5rem",border:`2px dashed ${dragging?"#e07b39":"#2a2f3d"}`,borderRadius:"12px",padding:"1.25rem",textAlign:"center",cursor:"pointer",background:dragging?"#1c1407":"#0d1117",transition:"all 0.15s",flexShrink:0 }}>
+          <input ref={inputRef} type="file" accept=".pdf,.jpg,.jpeg,.png" multiple style={{ display:"none" }} onChange={e=>{ if(e.target.files.length) addFiles(e.target.files); e.target.value=""; }}/>
+          <div style={{ color:"#4b5563",marginBottom:"0.25rem" }}><Icon name="upload" size={20}/></div>
+          <div style={{ fontSize:"0.82rem",color:dragging?"#e07b39":"#6b7280",fontWeight:600 }}>{dragging?"Drop all invoices here":"Drag & drop multiple PDFs or images"}</div>
+          <div style={{ fontSize:"0.7rem",color:"#4b5563",marginTop:"0.2rem" }}>or click to browse · AI reads each one · review before saving</div>
+        </div>
+
+        {/* Queue */}
+        {items.length > 0 && (
+          <div style={{ flex:1,overflowY:"auto",padding:"0 1.5rem 0.5rem" }}>
+            {items.map(item => {
+              const isActive = activeItem === item.id;
+              const statusColor = { queued:"#4b5563", parsing:"#b45309", done:"#4a7c59", error:"#f87171" }[item.status];
+              const statusLabel = { queued:"Queued", parsing:"Parsing…", done:"Ready", error:"Error" }[item.status];
+              return (
+                <div key={item.id} style={{ background:"#0d1117",border:`1px solid ${isActive?"#e07b39":"#1e2430"}`,borderRadius:"10px",marginBottom:"0.5rem",overflow:"hidden" }}>
+                  {/* Row summary */}
+                  <div style={{ display:"flex",alignItems:"center",gap:"0.75rem",padding:"0.65rem 0.85rem" }}>
+                    <div style={{ width:"6px",height:"6px",borderRadius:"50%",background:statusColor,flexShrink:0 }}/>
+                    <div style={{ flex:1,minWidth:0 }}>
+                      <div style={{ fontSize:"0.82rem",fontWeight:600,color:"#e8eaf0",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{item.file.name}</div>
+                      {item.status==="done"&&item.form && (
+                        <div style={{ fontSize:"0.72rem",color:"#6b7280",marginTop:"1px" }}>
+                          {item.form.amount?`$${item.form.amount}`:"—"} · {item.form.date} · {item.form.category}
+                          {item.form.vendorId && <span style={{ marginLeft:"6px",color:"#94a3b8" }}>{vendors.find(v=>v.id===item.form.vendorId)?.name||""}</span>}
+                        </div>
+                      )}
+                      {item.status==="parsing"&&<div style={{ fontSize:"0.7rem",color:"#b45309",marginTop:"1px",display:"flex",alignItems:"center",gap:"4px" }}><Spinner/>Reading with AI…</div>}
+                      {item.status==="error"&&<div style={{ fontSize:"0.7rem",color:"#f87171",marginTop:"1px" }}>{item.error}</div>}
+                    </div>
+                    <div style={{ display:"flex",alignItems:"center",gap:"0.4rem",flexShrink:0 }}>
+                      <span style={{ fontSize:"0.65rem",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.06em",color:statusColor,background:statusColor+"22",borderRadius:"99px",padding:"1px 7px" }}>{statusLabel}</span>
+                      {item.status==="done"&&<button onClick={()=>setActiveItem(isActive?null:item.id)} style={{ fontSize:"0.72rem",padding:"3px 8px",borderRadius:"5px",border:`1px solid ${isActive?"#e07b39":"#2a2f3d"}`,background:isActive?"#e07b3922":"#1e2430",color:isActive?"#e07b39":"#6b7280",cursor:"pointer" }}>{isActive?"Close":"Edit"}</button>}
+                      {item.status==="error"&&<button onClick={()=>{ setItems(p=>p.map(x=>x.id===item.id?{...x,status:"parsing",error:null}:x)); parseInvoiceWithAI(item.file,vendors,properties,projects).then(result=>setItems(p=>p.map(x=>x.id===item.id?{...x,status:"done",result,form:blankForm(result,item.file)}:x))).catch(e=>setItems(p=>p.map(x=>x.id===item.id?{...x,status:"error",error:e.message}:x))); }} style={{ fontSize:"0.72rem",padding:"3px 8px",borderRadius:"5px",border:"1px solid #2a2f3d",background:"#1e2430",color:"#6b7280",cursor:"pointer" }}>Retry</button>}
+                      <button onClick={()=>removeItem(item.id)} style={{ background:"none",border:"none",color:"#4b5563",cursor:"pointer",padding:"2px",display:"flex" }}><Icon name="x" size={13}/></button>
+                    </div>
+                  </div>
+
+                  {/* Inline edit panel */}
+                  {isActive && item.form && (
+                    <div style={{ padding:"0 0.85rem 0.85rem",borderTop:"1px solid #1e2430" }}>
+                      {item.result?.confidence && <div style={{ fontSize:"0.68rem",color:"#6b7280",padding:"0.4rem 0",marginBottom:"0.5rem" }}>AI confidence: <span style={{ color:confidenceColor[item.result.confidence],fontWeight:700,textTransform:"uppercase" }}>{item.result.confidence}</span>{item.form.vendorNameRaw&&<span style={{ marginLeft:"0.75rem" }}>Found: <strong style={{ color:"#94a3b8" }}>{item.form.vendorNameRaw}</strong></span>}</div>}
+                      <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0.5rem" }}>
+                        <div>
+                          <label style={labelStyle}>Vendor</label>
+                          <select style={inputStyle} value={item.form.vendorId} onChange={e=>updateForm(item.id,{vendorId:e.target.value})}>
+                            <option value="">— None —</option>
+                            {vendors.map(v=><option key={v.id} value={v.id}>{v.name}</option>)}
+                          </select>
+                        </div>
+                        <div>
+                          <label style={labelStyle}>Property</label>
+                          <select style={inputStyle} value={item.form.propertyId} onChange={e=>updateForm(item.id,{propertyId:e.target.value})}>
+                            <option value="">Select…</option>
+                            {properties.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+                          </select>
+                        </div>
+                        <div>
+                          <label style={labelStyle}>Amount ($)</label>
+                          <input style={inputStyle} type="number" value={item.form.amount} onChange={e=>updateForm(item.id,{amount:e.target.value})} placeholder="0.00"/>
+                        </div>
+                        <div>
+                          <label style={labelStyle}>Date</label>
+                          <input style={inputStyle} type="date" value={item.form.date} onChange={e=>updateForm(item.id,{date:e.target.value})}/>
+                        </div>
+                        <div>
+                          <label style={labelStyle}>Category</label>
+                          <select style={inputStyle} value={item.form.category} onChange={e=>updateForm(item.id,{category:e.target.value})}>
+                            {CATEGORIES.map(c=><option key={c}>{c}</option>)}
+                          </select>
+                        </div>
+                        <div>
+                          <label style={labelStyle}>Invoice #</label>
+                          <input style={inputStyle} value={item.form.invoiceNumber||""} onChange={e=>updateForm(item.id,{invoiceNumber:e.target.value})} placeholder="INV-001"/>
+                        </div>
+                      </div>
+                      <div style={{ marginTop:"0.5rem" }}>
+                        <label style={labelStyle}>Description</label>
+                        <input style={inputStyle} value={item.form.description} onChange={e=>updateForm(item.id,{description:e.target.value})} placeholder="Brief description…"/>
+                      </div>
+                      <div style={{ display:"flex",gap:"0.4rem",marginTop:"0.5rem",flexWrap:"wrap" }}>
+                        {RECURRING_OPTIONS.map(r=>(
+                          <button key={r.value} onClick={()=>updateForm(item.id,{recurring:r.value})}
+                            style={{ flex:1,padding:"0.35rem 0.4rem",borderRadius:"6px",border:`1px solid ${item.form.recurring===r.value?r.color:"#2a2f3d"}`,background:item.form.recurring===r.value?r.color+"22":"#0d1117",color:item.form.recurring===r.value?r.color:"#6b7280",cursor:"pointer",fontSize:"0.72rem",fontWeight:item.form.recurring===r.value?700:400,textAlign:"center",whiteSpace:"nowrap",minWidth:0 }}>
+                            {r.value!=="one-time"&&"↻ "}{r.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Footer */}
+        <div style={{ padding:"1rem 1.5rem",borderTop:"1px solid #1e2430",display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0,background:"#14181f",borderRadius:"0 0 16px 16px" }}>
+          <div style={{ fontSize:"0.78rem",color:"#6b7280" }}>
+            {doneCount > 0 ? <><span style={{ color:"#4a7c59",fontWeight:700 }}>{doneCount}</span> invoice{doneCount!==1?"s":""} ready to save</> : items.length === 0 ? "No files added yet" : "Waiting for AI to finish…"}
+            {saving && savedCount > 0 && <span style={{ marginLeft:"0.5rem",color:"#b45309" }}>Saved {savedCount}…</span>}
+          </div>
+          <div style={{ display:"flex",gap:"0.5rem" }}>
+            <BtnSecondary onClick={onClose}>Cancel</BtnSecondary>
+            <BtnPrimary onClick={saveAll} disabled={saving||doneCount===0}>
+              {saving?<><Spinner/>Saving…</>:<><Icon name="check" size={13}/>Save {doneCount} Invoice{doneCount!==1?"s":""}</>}
+            </BtnPrimary>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Vendor AI Drop Zone ──────────────────────────────────────────────────────
 function VendorDropZone({ onConfirm }) {
   const [dragging, setDragging] = useState(false);
@@ -1500,9 +1735,27 @@ function VendorDropZone({ onConfirm }) {
 function VendorDetail({ vendor, invoices, properties, projects, isAdmin, onUpdate, onDelete, onBack }) {
   const [editModal, setEditModal] = useState(false);
   const [form, setForm] = useState({...vendor});
-  const vendorInvoices = invoices.filter(i=>i.vendorId===vendor.id).sort((a,b)=>new Date(b.date)-new Date(a.date));
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const allVendorInvoices = invoices.filter(i=>i.vendorId===vendor.id).sort((a,b)=>new Date(b.date)-new Date(a.date));
+  const hasDateFilter = !!(dateFrom||dateTo);
+  const vendorInvoices = allVendorInvoices.filter(i=>{
+    if (dateFrom&&i.date&&i.date<dateFrom) return false;
+    if (dateTo&&i.date&&i.date>dateTo) return false;
+    return true;
+  });
   const totalSpent = vendorInvoices.reduce((s,i)=>s+Number(i.amount),0);
   const byProp = properties.map(p=>({ ...p, total:vendorInvoices.filter(i=>i.propertyId===p.id).reduce((s,i)=>s+Number(i.amount),0) })).filter(p=>p.total>0);
+
+  function applyDatePreset(preset) {
+    const now = new Date(); const y = now.getFullYear(); const m = now.getMonth();
+    if (preset==="this_month") { setDateFrom(`${y}-${String(m+1).padStart(2,"0")}-01`); setDateTo(`${y}-${String(m+1).padStart(2,"0")}-${String(new Date(y,m+1,0).getDate()).padStart(2,"0")}`); }
+    else if (preset==="last_month") { const lm=m===0?11:m-1; const ly=m===0?y-1:y; setDateFrom(`${ly}-${String(lm+1).padStart(2,"0")}-01`); setDateTo(`${ly}-${String(lm+1).padStart(2,"0")}-${String(new Date(ly,lm+1,0).getDate()).padStart(2,"0")}`); }
+    else if (preset==="this_year") { setDateFrom(`${y}-01-01`); setDateTo(`${y}-12-31`); }
+    else if (preset==="last_year") { setDateFrom(`${y-1}-01-01`); setDateTo(`${y-1}-12-31`); }
+    else if (preset==="last_90") { const d=new Date(now); d.setDate(d.getDate()-90); setDateFrom(d.toISOString().slice(0,10)); setDateTo(now.toISOString().slice(0,10)); }
+    else { setDateFrom(""); setDateTo(""); }
+  }
 
   async function handleSave() {
     if (!form.name.trim()) return;
@@ -1537,7 +1790,7 @@ function VendorDetail({ vendor, invoices, properties, projects, isAdmin, onUpdat
           {vendor.notes&&<div style={{ fontSize:"0.78rem",color:"#6b7280",fontStyle:"italic",marginTop:"4px" }}>{vendor.notes}</div>}
         </div>
         <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(110px,1fr))",gap:"0.75rem",paddingTop:"0.75rem",borderTop:"1px solid #1e2430" }}>
-          {[{l:"Total Paid",v:fmt(totalSpent),c:"#e07b39"},{l:"Invoices",v:vendorInvoices.length,c:"#3b6fa0"},{l:"Properties",v:byProp.length,c:"#4a7c59"}].map(x=>(
+          {[{l:"Total Paid",v:fmt(allVendorInvoices.reduce((s,i)=>s+Number(i.amount),0)),c:"#e07b39"},{l:"Invoices",v:allVendorInvoices.length,c:"#3b6fa0"},{l:"Properties",v:properties.map(p=>({ ...p, total:allVendorInvoices.filter(i=>i.propertyId===p.id).reduce((s,i)=>s+Number(i.amount),0) })).filter(p=>p.total>0).length,c:"#4a7c59"}].map(x=>(
             <div key={x.l}><div style={{ fontSize:"0.62rem",color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:"2px" }}>{x.l}</div><div style={{ fontSize:"1.1rem",fontWeight:700,color:x.c,fontFamily:"'DM Mono',monospace" }}>{x.v}</div></div>
           ))}
         </div>
@@ -1552,9 +1805,29 @@ function VendorDetail({ vendor, invoices, properties, projects, isAdmin, onUpdat
         </div>}
       </div>
 
-      <div style={{ fontSize:"0.72rem",fontWeight:700,color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:"0.75rem" }}>Invoice History ({vendorInvoices.length})</div>
+      <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:"0.5rem",marginBottom:"0.75rem" }}>
+        <div style={{ fontSize:"0.72rem",fontWeight:700,color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.07em" }}>
+          Invoice History ({vendorInvoices.length}{hasDateFilter&&allVendorInvoices.length!==vendorInvoices.length?` of ${allVendorInvoices.length}`:""})
+        </div>
+        <div style={{ display:"flex",gap:"0.4rem",alignItems:"center",flexWrap:"wrap" }}>
+          <select style={{...inputStyle,width:"auto",fontSize:"0.75rem",padding:"0.35rem 0.6rem",color:hasDateFilter?"#e07b39":"#6b7280"}} onChange={e=>{ applyDatePreset(e.target.value); e.target.value=""; }} defaultValue="">
+            <option value="" disabled>Quick range…</option>
+            <option value="this_month">This Month</option>
+            <option value="last_month">Last Month</option>
+            <option value="last_90">Last 90 Days</option>
+            <option value="this_year">This Year</option>
+            <option value="last_year">Last Year</option>
+            <option value="clear">Clear</option>
+          </select>
+          <input style={{...inputStyle,width:"120px",fontSize:"0.75rem",padding:"0.35rem 0.6rem",borderColor:dateFrom?"#e07b3966":"#2a2f3d"}} type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} title="From date"/>
+          <span style={{ fontSize:"0.72rem",color:"#4b5563" }}>→</span>
+          <input style={{...inputStyle,width:"120px",fontSize:"0.75rem",padding:"0.35rem 0.6rem",borderColor:dateTo?"#e07b3966":"#2a2f3d"}} type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} title="To date"/>
+          {hasDateFilter&&<button onClick={()=>{setDateFrom("");setDateTo("");}} style={{ background:"none",border:"1px solid #2a2f3d",borderRadius:"5px",color:"#6b7280",cursor:"pointer",fontSize:"0.7rem",display:"flex",alignItems:"center",gap:"3px",padding:"3px 7px" }}><Icon name="x" size={10}/>Clear</button>}
+        </div>
+      </div>
+      {hasDateFilter&&<div style={{ fontSize:"0.72rem",color:"#b45309",marginBottom:"0.5rem" }}>{fmt(totalSpent)} in filtered period</div>}
       {vendorInvoices.length===0 ? (
-        <div style={{ background:"#14181f",border:"1px dashed #2a2f3d",borderRadius:"10px",padding:"2.5rem",textAlign:"center",color:"#4b5563",fontSize:"0.85rem" }}>No invoices from this vendor yet.</div>
+        <div style={{ background:"#14181f",border:"1px dashed #2a2f3d",borderRadius:"10px",padding:"2.5rem",textAlign:"center",color:"#4b5563",fontSize:"0.85rem" }}>{hasDateFilter?"No invoices in this date range.":"No invoices from this vendor yet."}</div>
       ) : (
         <div style={{ background:"#14181f",border:"1px solid #1e2430",borderRadius:"12px",overflow:"hidden" }}>
           {vendorInvoices.map((inv,idx)=>{
@@ -1694,7 +1967,21 @@ function Invoices({ invoices, properties, vendors, projects, viewingAs, isAdmin,
   const [modal, setModal] = useState(null);
   const [filterProp, setFilterProp] = useState("all");
   const [filterCat, setFilterCat] = useState("all");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const readOnly = !!viewingAs;
+
+  function applyDatePreset(preset) {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = now.getMonth();
+    if (preset === "this_month") { setDateFrom(`${y}-${String(m+1).padStart(2,"0")}-01`); setDateTo(`${y}-${String(m+1).padStart(2,"0")}-${String(new Date(y,m+1,0).getDate()).padStart(2,"0")}`); }
+    else if (preset === "last_month") { const lm=m===0?11:m-1; const ly=m===0?y-1:y; setDateFrom(`${ly}-${String(lm+1).padStart(2,"0")}-01`); setDateTo(`${ly}-${String(lm+1).padStart(2,"0")}-${String(new Date(ly,lm+1,0).getDate()).padStart(2,"0")}`); }
+    else if (preset === "this_year") { setDateFrom(`${y}-01-01`); setDateTo(`${y}-12-31`); }
+    else if (preset === "last_year") { setDateFrom(`${y-1}-01-01`); setDateTo(`${y-1}-12-31`); }
+    else if (preset === "last_90") { const d=new Date(now); d.setDate(d.getDate()-90); setDateFrom(d.toISOString().slice(0,10)); setDateTo(now.toISOString().slice(0,10)); }
+    else { setDateFrom(""); setDateTo(""); }
+  }
   const blank = { propertyId:properties[0]?.id||"",vendorId:"",category:CATEGORIES[0],amount:"",date:new Date().toISOString().slice(0,10),description:"",invoiceNumber:"",fileName:null,fileUrl:null,filePath:null,recurring:"one-time" };
   const [form, setForm] = useState(blank);
   const [uploading, setUploading] = useState(false);
@@ -1733,24 +2020,43 @@ function Invoices({ invoices, properties, vendors, projects, viewingAs, isAdmin,
   const filtered = invoices.filter(i=>{
     if (filterProp!=="all"&&i.propertyId!==filterProp) return false;
     if (filterCat!=="all"&&i.category!==filterCat) return false;
+    if (dateFrom&&i.date&&i.date<dateFrom) return false;
+    if (dateTo&&i.date&&i.date>dateTo) return false;
     return true;
   }).sort((a,b)=>new Date(b.date)-new Date(a.date));
+  const hasDateFilter = !!(dateFrom||dateTo);
 
   return (
     <div>
-      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1rem",flexWrap:"wrap",gap:"0.75rem" }}>
+      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"0.75rem",flexWrap:"wrap",gap:"0.75rem" }}>
         <h2 style={{ margin:0,fontSize:"1.1rem",fontWeight:700,color:"#e8eaf0" }}>Invoices {viewingAs&&<OwnerTag email={viewingAs.email} name={viewingAs.full_name}/>}</h2>
-        <div style={{ display:"flex",gap:"0.5rem",alignItems:"center",flexWrap:"wrap" }}>
-          <select style={{...inputStyle,width:"auto"}} value={filterProp} onChange={e=>setFilterProp(e.target.value)}>
-            <option value="all">All Properties</option>
-            {properties.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>
-          <select style={{...inputStyle,width:"auto"}} value={filterCat} onChange={e=>setFilterCat(e.target.value)}>
-            <option value="all">All Categories</option>
-            {CATEGORIES.map(c=><option key={c}>{c}</option>)}
-          </select>
-          {!readOnly && <BtnPrimary onClick={()=>{setForm({...blank,propertyId:properties[0]?.id||""});setPendingFile(null);setModal("add");}}><Icon name="plus" size={14}/>Add Invoice</BtnPrimary>}
-        </div>
+        {!readOnly && <BtnPrimary onClick={()=>{setForm({...blank,propertyId:properties[0]?.id||""});setPendingFile(null);setModal("add");}}><Icon name="plus" size={14}/>Add Invoice</BtnPrimary>}
+      </div>
+
+      {/* Filter bar */}
+      <div style={{ background:"#0d1117",border:"1px solid #1e2430",borderRadius:"10px",padding:"0.75rem 1rem",marginBottom:"1rem",display:"flex",flexWrap:"wrap",gap:"0.5rem",alignItems:"center" }}>
+        <select style={{...inputStyle,width:"auto",flex:"0 0 auto"}} value={filterProp} onChange={e=>setFilterProp(e.target.value)}>
+          <option value="all">All Properties</option>
+          {properties.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
+        <select style={{...inputStyle,width:"auto",flex:"0 0 auto"}} value={filterCat} onChange={e=>setFilterCat(e.target.value)}>
+          <option value="all">All Categories</option>
+          {CATEGORIES.map(c=><option key={c}>{c}</option>)}
+        </select>
+        <div style={{ width:"1px",height:"20px",background:"#2a2f3d",flexShrink:0 }}/>
+        <select style={{...inputStyle,width:"auto",flex:"0 0 auto",color:hasDateFilter?"#e07b39":"#6b7280"}} onChange={e=>{ applyDatePreset(e.target.value); e.target.value=""; }} defaultValue="">
+          <option value="" disabled>Quick range…</option>
+          <option value="this_month">This Month</option>
+          <option value="last_month">Last Month</option>
+          <option value="last_90">Last 90 Days</option>
+          <option value="this_year">This Year</option>
+          <option value="last_year">Last Year</option>
+          <option value="clear">Clear dates</option>
+        </select>
+        <input style={{...inputStyle,width:"130px",flex:"0 0 auto",borderColor:dateFrom?"#e07b3966":"#2a2f3d"}} type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} title="From date"/>
+        <span style={{ fontSize:"0.75rem",color:"#4b5563" }}>→</span>
+        <input style={{...inputStyle,width:"130px",flex:"0 0 auto",borderColor:dateTo?"#e07b3966":"#2a2f3d"}} type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} title="To date"/>
+        {hasDateFilter && <button onClick={()=>{setDateFrom("");setDateTo("");}} style={{ background:"none",border:"none",color:"#6b7280",cursor:"pointer",fontSize:"0.72rem",display:"flex",alignItems:"center",gap:"3px",padding:"2px 6px",borderRadius:"5px",border:"1px solid #2a2f3d" }}><Icon name="x" size={11}/>Clear</button>}
       </div>
 
       {!readOnly && <InvoiceDropZone vendors={vendors} properties={properties} projects={projects||[]} onConfirm={f=>onAdd(f)}/>}
