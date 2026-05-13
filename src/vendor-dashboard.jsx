@@ -1131,33 +1131,32 @@ function PropertyDetail({ property, invoices, tenants, projects, vendors, isAdmi
                 const projInvoices = invoices.filter(i=>i.projectId===p.id);
                 const invoiceTotal = projInvoices.reduce((s,i)=>s+Number(i.amount),0);
 
-                // Cost estimates for Utilities project
-                const isUtilities = p.name==="Utilities";
-                // Cost estimates for HOA/Taxes/Insurance project
-                const isHOA = p.name==="HOA / Taxes / Insurance";
+                const isUtilities = /utilit/i.test(p.name);
+                const isHOA = /hoa|tax|insurance/i.test(p.name);
+                const isMaintenance = /mainten|lawn|pool|clean|hvac|pest/i.test(p.name);
+                const showCostEst = isUtilities || isHOA || isMaintenance;
 
-                // Monthly cost: sum of monthly invoices + quarterly/12 + annual/12
-                function estimatedMonthlyCost(invList) {
-                  return invList.reduce((s,i)=>{
-                    const amt = Number(i.amount)||0;
-                    if (i.recurring==="monthly") return s+amt;
-                    if (i.recurring==="quarterly") return s+(amt/3);
-                    if (i.recurring==="annually") return s+(amt/12);
-                    return s; // one-time excluded
-                  },0);
-                }
-                function estimatedAnnualCost(invList) {
-                  return invList.reduce((s,i)=>{
-                    const amt = Number(i.amount)||0;
-                    if (i.recurring==="monthly") return s+(amt*12);
-                    if (i.recurring==="quarterly") return s+(amt*4);
-                    if (i.recurring==="annually") return s+amt;
-                    return s;
-                  },0);
+                // Year-based cost estimation:
+                // For each year, sum all invoices in that year, divide by:
+                //   - months elapsed so far this year (for current year)
+                //   - 12 (for past years)
+                const now = new Date();
+                const currentYear = now.getFullYear();
+                const monthsElapsedThisYear = now.getMonth() + 1; // 1-12
+
+                function yearStats(yr) {
+                  const inv = projInvoices.filter(i => i.date && new Date(i.date).getFullYear() === yr);
+                  if (inv.length === 0) return null;
+                  const total = inv.reduce((s,i) => s + Number(i.amount||0), 0);
+                  const divisor = yr === currentYear ? monthsElapsedThisYear : 12;
+                  const monthly = total / divisor;
+                  const annual = yr === currentYear ? monthly * 12 : total;
+                  return { yr, total, monthly, annual, count: inv.length, divisor };
                 }
 
-                const estMonthly = estimatedMonthlyCost(projInvoices);
-                const estAnnual = estimatedAnnualCost(projInvoices);
+                const stats2025 = yearStats(2025);
+                const stats2026 = yearStats(2026);
+                const hasStats = stats2025 || stats2026;
 
                 return (
                   <div key={p.id}
@@ -1179,26 +1178,33 @@ function PropertyDetail({ property, invoices, tenants, projects, vendors, isAdmi
                       {actual>0&&<div><div style={{ fontSize:"0.62rem",color:"#6b7280",textTransform:"uppercase" }}>Actual</div><div style={{ fontSize:"0.85rem",fontWeight:600,color:actual>budget?"#f87171":"#4a7c59",fontFamily:"'DM Mono',monospace" }}>{fmt(actual)}</div></div>}
                     </div>}
 
-                    {/* Cost estimates for Utilities */}
-                    {isUtilities&&(estMonthly>0||estAnnual>0)&&(
+                    {/* Year-based cost estimates for Utilities, Maintenance, HOA */}
+                    {showCostEst && hasStats && (
                       <div style={{ marginTop:"0.5rem",paddingTop:"0.65rem",borderTop:"1px solid #1a1f2b" }}>
-                        <div style={{ fontSize:"0.62rem",color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:"0.4rem" }}>Estimated Recurring Cost</div>
-                        <div style={{ display:"flex",gap:"1rem" }}>
-                          {estMonthly>0&&<div><div style={{ fontSize:"0.6rem",color:"#6b7280",textTransform:"uppercase" }}>Monthly</div><div style={{ fontSize:"0.9rem",fontWeight:700,color:"#8b5cf6",fontFamily:"'DM Mono',monospace" }}>{fmt(estMonthly)}/mo</div></div>}
-                          {estAnnual>0&&<div><div style={{ fontSize:"0.6rem",color:"#6b7280",textTransform:"uppercase" }}>Annual</div><div style={{ fontSize:"0.9rem",fontWeight:700,color:"#0891b2",fontFamily:"'DM Mono',monospace" }}>{fmt(estAnnual)}/yr</div></div>}
+                        <div style={{ fontSize:"0.6rem",color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:"0.5rem" }}>
+                          {isHOA ? "Est. Annual Cost" : "Est. Monthly / Annual"}
+                        </div>
+                        <div style={{ display:"flex",flexDirection:"column",gap:"0.45rem" }}>
+                          {[stats2025, stats2026].filter(Boolean).reverse().map(s=>(
+                            <div key={s.yr} style={{ display:"flex",alignItems:"center",gap:"0.6rem",flexWrap:"wrap" }}>
+                              <span style={{ fontSize:"0.62rem",fontWeight:700,color:"#4b5563",minWidth:"30px" }}>{s.yr}</span>
+                              {isHOA ? (
+                                <span style={{ fontSize:"0.88rem",fontWeight:700,color:"#4a7c59",fontFamily:"'DM Mono',monospace" }}>{fmt(s.annual)}/yr</span>
+                              ) : (
+                                <>
+                                  <span style={{ fontSize:"0.88rem",fontWeight:700,color:"#8b5cf6",fontFamily:"'DM Mono',monospace" }}>{fmt(s.monthly)}/mo</span>
+                                  <span style={{ fontSize:"0.65rem",color:"#4b5563" }}>·</span>
+                                  <span style={{ fontSize:"0.88rem",fontWeight:700,color:"#0891b2",fontFamily:"'DM Mono',monospace" }}>{fmt(s.annual)}/yr</span>
+                                </>
+                              )}
+                              {s.yr===currentYear&&<span style={{ fontSize:"0.58rem",color:"#4b5563",fontStyle:"italic" }}>({s.divisor}mo)</span>}
+                            </div>
+                          ))}
                         </div>
                       </div>
                     )}
 
-                    {/* Cost estimates for HOA / Taxes / Insurance — annual only */}
-                    {isHOA&&estAnnual>0&&(
-                      <div style={{ marginTop:"0.5rem",paddingTop:"0.65rem",borderTop:"1px solid #1a1f2b" }}>
-                        <div style={{ fontSize:"0.62rem",color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:"0.4rem" }}>Estimated Annual Cost</div>
-                        <div style={{ fontSize:"0.9rem",fontWeight:700,color:"#0891b2",fontFamily:"'DM Mono',monospace" }}>{fmt(estAnnual)}/yr</div>
-                      </div>
-                    )}
-
-                    {invoiceTotal>0&&<div style={{ marginTop:"0.5rem",fontSize:"0.68rem",color:"#4b5563" }}>{projInvoices.length} invoice{projInvoices.length!==1?"s":""} · {fmt(invoiceTotal)} total</div>}
+                    {invoiceTotal>0&&<div style={{ marginTop:"0.6rem",fontSize:"0.68rem",color:"#4b5563" }}>{projInvoices.length} invoice{projInvoices.length!==1?"s":""} · {fmt(invoiceTotal)} total</div>}
                     {onViewProject&&<div style={{ marginTop:"0.35rem",fontSize:"0.68rem",color:"#4b5563" }}>Click to view project →</div>}
                   </div>
                 );
@@ -2394,6 +2400,30 @@ function Projects({ projects, properties, vendors, invoices, viewingAs, isAdmin,
           const color = PROJECT_STATUS_COLORS[p.status]||"#6b7280";
           const budget = tasks.reduce((s,t)=>s+Number(t.budget||0),0);
           const actual = tasks.reduce((s,t)=>s+Number(t.actual||0),0);
+          const projInvoices = invoices.filter(i=>i.projectId===p.id);
+
+          const isUtilCard = /utilit/i.test(p.name);
+          const isHOACard = /hoa|tax|insurance/i.test(p.name);
+          const isMaintCard = /mainten|lawn|pool|clean|hvac|pest/i.test(p.name);
+          const showCostCard = isUtilCard || isHOACard || isMaintCard;
+
+          const now = new Date();
+          const currentYear = now.getFullYear();
+          const monthsElapsed = now.getMonth() + 1;
+
+          function cardYearStats(yr) {
+            const inv = projInvoices.filter(i => i.date && new Date(i.date).getFullYear() === yr);
+            if (inv.length === 0) return null;
+            const total = inv.reduce((s,i) => s + Number(i.amount||0), 0);
+            const divisor = yr === currentYear ? monthsElapsed : 12;
+            const monthly = total / divisor;
+            const annual = yr === currentYear ? monthly * 12 : total;
+            return { yr, monthly, annual, divisor };
+          }
+          const cStats2025 = cardYearStats(2025);
+          const cStats2026 = cardYearStats(2026);
+          const hasCardStats = cStats2025 || cStats2026;
+
           return (
             <div onClick={()=>setView(p.id)} style={{ background:"#14181f",border:"1px solid #1e2430",borderRadius:"12px",padding:"1.1rem",cursor:"pointer",borderTop:`3px solid ${color}` }}>
               <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"0.4rem" }}>
@@ -2405,10 +2435,34 @@ function Projects({ projects, properties, vendors, invoices, viewingAs, isAdmin,
                 <div style={{ display:"flex",justifyContent:"space-between",fontSize:"0.68rem",color:"#6b7280",marginBottom:"3px" }}><span>{done}/{tasks.length} tasks</span><span>{pct}%</span></div>
                 <div style={{ height:"4px",background:"#1e2430",borderRadius:"99px",overflow:"hidden" }}><div style={{ height:"100%",width:`${pct}%`,background:pct===100?"#4a7c59":"#e07b39",borderRadius:"99px" }}/></div>
               </div>}
-              {(budget>0||actual>0)&&<div style={{ display:"flex",gap:"1rem" }}>
+              {(budget>0||actual>0)&&<div style={{ display:"flex",gap:"1rem",marginBottom:"0.5rem" }}>
                 {budget>0&&<div><div style={{ fontSize:"0.6rem",color:"#6b7280",textTransform:"uppercase" }}>Budget</div><div style={{ fontSize:"0.85rem",fontWeight:600,color:"#e07b39",fontFamily:"'DM Mono',monospace" }}>{fmt(budget)}</div></div>}
                 {actual>0&&<div><div style={{ fontSize:"0.6rem",color:"#6b7280",textTransform:"uppercase" }}>Actual</div><div style={{ fontSize:"0.85rem",fontWeight:600,color:actual>budget?"#f87171":"#4a7c59",fontFamily:"'DM Mono',monospace" }}>{fmt(actual)}</div></div>}
               </div>}
+              {showCostCard && hasCardStats && (
+                <div style={{ marginTop:"0.4rem",paddingTop:"0.5rem",borderTop:"1px solid #1a1f2b" }}>
+                  <div style={{ fontSize:"0.58rem",color:"#4b5563",textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:"0.35rem" }}>
+                    {isHOACard ? "Est. Annual" : "Est. Monthly / Annual"}
+                  </div>
+                  <div style={{ display:"flex",flexDirection:"column",gap:"0.3rem" }}>
+                    {[cStats2025,cStats2026].filter(Boolean).reverse().map(s=>(
+                      <div key={s.yr} style={{ display:"flex",alignItems:"center",gap:"0.5rem",flexWrap:"wrap" }}>
+                        <span style={{ fontSize:"0.6rem",fontWeight:700,color:"#374151",minWidth:"30px" }}>{s.yr}</span>
+                        {isHOACard ? (
+                          <span style={{ fontSize:"0.82rem",fontWeight:700,color:"#4a7c59",fontFamily:"'DM Mono',monospace" }}>{fmt(s.annual)}/yr</span>
+                        ) : (
+                          <>
+                            <span style={{ fontSize:"0.82rem",fontWeight:700,color:"#8b5cf6",fontFamily:"'DM Mono',monospace" }}>{fmt(s.monthly)}/mo</span>
+                            <span style={{ fontSize:"0.6rem",color:"#374151" }}>·</span>
+                            <span style={{ fontSize:"0.82rem",fontWeight:700,color:"#0891b2",fontFamily:"'DM Mono',monospace" }}>{fmt(s.annual)}/yr</span>
+                          </>
+                        )}
+                        {s.yr===currentYear&&<span style={{ fontSize:"0.56rem",color:"#374151",fontStyle:"italic" }}>({s.divisor}mo)</span>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
               {isAdmin&&p.ownerName&&<div style={{ marginTop:"0.5rem" }}><OwnerTag email={p.ownerEmail} name={p.ownerName}/></div>}
             </div>
           );
