@@ -1302,9 +1302,13 @@ function Properties({ properties, isAdmin, viewingAs, onAdd, onUpdate, onDelete,
   const [selectedProperty, setSelectedProperty] = useState(null);
   const [selectedProject, setSelectedProject] = useState(null);
   const [modal, setModal] = useState(null);
+  const [propChartYear, setPropChartYear] = useState("all");
   const blank = { name:"",address:"",city:"",state:"FL",color:PROPERTY_COLORS[0] };
   const [form, setForm] = useState(blank);
   const readOnly = !!viewingAs;
+
+  const propYears = [...new Set(invoices.map(i=>i.date?new Date(i.date).getFullYear():null).filter(Boolean))].sort((a,b)=>b-a);
+  const propFilteredInvoices = propChartYear==="all" ? invoices : invoices.filter(i=>i.date && new Date(i.date).getFullYear()===Number(propChartYear));
 
   // If a project is selected, render it in detail view
   if (selectedProject) {
@@ -1326,10 +1330,6 @@ function Properties({ properties, isAdmin, viewingAs, onAdd, onUpdate, onDelete,
     if (!live) { setSelectedProperty(null); return null; }
     return <PropertyDetail property={live} invoices={invoices} tenants={tenants} projects={projects||[]} vendors={vendors||[]} isAdmin={isAdmin} onUpdate={onUpdate} onDelete={async(id)=>{ await onDelete(id); setSelectedProperty(null); }} onBack={()=>setSelectedProperty(null)} onViewProject={(id)=>setSelectedProject(id)}/>;
   }
-
-  const [propChartYear, setPropChartYear] = useState("all");
-  const propYears = [...new Set(invoices.map(i=>i.date?new Date(i.date).getFullYear():null).filter(Boolean))].sort((a,b)=>b-a);
-  const propFilteredInvoices = propChartYear==="all" ? invoices : invoices.filter(i=>i.date && new Date(i.date).getFullYear()===Number(propChartYear));
 
   function openAdd() { setForm(blank); setModal("add"); }
   async function handleSave() {
