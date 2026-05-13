@@ -36,10 +36,11 @@ async function deleteFile(path) {
 // ─── Constants ────────────────────────────────────────────────────────────────
 const CATEGORIES = ["Lawn Care","Pool Service","House Cleaning","HVAC","Plumbing","Electrical","Pest Control","Roofing","Landscaping","General Repair","Insurance","HOA","Taxes","Interest","Other"];
 const RECURRING_OPTIONS = [
-  { value:"one-time",  label:"One-Time",  color:"#6b7280" },
-  { value:"monthly",   label:"Monthly",   color:"#8b5cf6" },
-  { value:"quarterly", label:"Quarterly", color:"#0891b2" },
-  { value:"annually",  label:"Annually",  color:"#4a7c59" },
+  { value:"one-time",    label:"One-Time",    color:"#6b7280" },
+  { value:"monthly",     label:"Monthly",     color:"#8b5cf6" },
+  { value:"quarterly",   label:"Quarterly",   color:"#0891b2" },
+  { value:"semiannual",  label:"Semiannual",  color:"#d946a8" },
+  { value:"annually",    label:"Annually",    color:"#4a7c59" },
 ];
 const US_STATES = ["AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY"];
 const PROPERTY_COLORS = ["#e07b39","#4a7c59","#3b6fa0","#8b5cf6","#d946a8","#e11d48","#0891b2","#b45309"];
@@ -461,7 +462,7 @@ function InvoiceDropZone({ vendors, properties, projects, onConfirm }) {
               <Field label="Match to Existing Vendor">
                 <select style={inputStyle} value={form.vendorId} onChange={e=>setForm(f=>({...f,vendorId:e.target.value}))}>
                   <option value="">— No match —</option>
-                  {vendors.map(v=><option key={v.id} value={v.id}>{v.name}</option>)}
+                  {[...vendors].sort((a,b)=>a.name.localeCompare(b.name)).map(v=><option key={v.id} value={v.id}>{v.name}</option>)}
                 </select>
               </Field>
 
@@ -488,13 +489,13 @@ function InvoiceDropZone({ vendors, properties, projects, onConfirm }) {
                 <Field label="Property">
                   <select style={inputStyle} value={form.propertyId} onChange={e=>setForm(f=>({...f,propertyId:e.target.value}))}>
                     <option value="">Select…</option>
-                    {properties.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+                    {[...properties].sort((a,b)=>a.name.localeCompare(b.name)).map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
                   </select>
                 </Field>
                 <Field label="Project (optional)">
                   <select style={inputStyle} value={form.projectId} onChange={e=>setForm(f=>({...f,projectId:e.target.value}))}>
                     <option value="">— None —</option>
-                    {projects.map(p=>{const prop=properties.find(x=>x.id===p.propertyId);return <option key={p.id} value={p.id}>{p.name}{prop?` — ${prop.name}`:""}</option>;})}
+                    {[...projects].sort((a,b)=>a.name.localeCompare(b.name)).map(p=>{const prop=properties.find(x=>x.id===p.propertyId);return <option key={p.id} value={p.id}>{p.name}{prop?` — ${prop.name}`:""}</option>;})}
                   </select>
                 </Field>
               </Grid2>
@@ -636,12 +637,18 @@ function DonutChart({ data, size=160, thickness=28 }) {
 }
 
 // Sparkline / area chart — monthly trend, supports optional second line
-function SparkLine({ invoices, tenants, months=12, color="#e07b39", height=80 }) {
+function SparkLine({ invoices, tenants, months=12, color="#e07b39", height=80, year=null }) {
   const now = new Date();
-  const buckets = Array.from({length:months},(_,i)=>{
-    const d = new Date(now.getFullYear(),now.getMonth()-months+1+i,1);
-    return { label:`${d.toLocaleString("default",{month:"short"})} ${d.getFullYear().toString().slice(2)}`, year:d.getFullYear(), month:d.getMonth(), expense:0, income:0 };
-  });
+  // If a specific year is given, show all 12 months of that year
+  const buckets = year
+    ? Array.from({length:12},(_,i)=>({
+        label:`${new Date(year,i,1).toLocaleString("default",{month:"short"})}`,
+        year, month:i, expense:0, income:0
+      }))
+    : Array.from({length:months},(_,i)=>{
+        const d = new Date(now.getFullYear(),now.getMonth()-months+1+i,1);
+        return { label:`${d.toLocaleString("default",{month:"short"})} ${d.getFullYear().toString().slice(2)}`, year:d.getFullYear(), month:d.getMonth(), expense:0, income:0 };
+      });
 
   // Expenses — from invoices by date
   (invoices||[]).forEach(inv=>{
@@ -743,7 +750,14 @@ function ChartCard({ title, children, style }) {
   );
 }
 function Dashboard({ properties, invoices, vendors, tenants, projects, isAdmin, viewingAs }) {
-  const grandExpense = invoices.reduce((s,i)=>s+Number(i.amount),0);
+  const [chartYear, setChartYear] = useState("all");
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const availableYears = [...new Set(invoices.map(i=>i.date?new Date(i.date).getFullYear():null).filter(Boolean))].sort((a,b)=>b-a);
+
+  const filteredInvoices = chartYear==="all" ? invoices : invoices.filter(i=>i.date && new Date(i.date).getFullYear()===Number(chartYear));
+
+  const grandExpense = filteredInvoices.reduce((s,i)=>s+Number(i.amount),0);
   const activeTenants = tenants.filter(t=>leaseStatus(t.leaseStart,t.leaseEnd)==="active");
   const totalRentIncome = activeTenants.reduce((s,t)=>s+leaseTotalRent(t),0);
   const expiringCount = tenants.filter(t=>leaseStatus(t.leaseStart,t.leaseEnd)==="expiring").length;
@@ -752,17 +766,28 @@ function Dashboard({ properties, invoices, vendors, tenants, projects, isAdmin, 
 
   const propTotals = properties.map(p=>({
     ...p,
-    expense: invoices.filter(i=>i.propertyId===p.id).reduce((s,i)=>s+Number(i.amount),0),
+    expense: filteredInvoices.filter(i=>i.propertyId===p.id).reduce((s,i)=>s+Number(i.amount),0),
     income: tenants.filter(t=>t.propertyId===p.id&&leaseStatus(t.leaseStart,t.leaseEnd)==="active").reduce((s,t)=>s+leaseTotalRent(t),0),
   }));
 
   const CHART_COLORS = ["#e07b39","#3b6fa0","#4a7c59","#8b5cf6","#0891b2","#d946a8","#b45309","#e11d48","#34d399","#f87171","#60a5fa","#a78bfa","#fbbf24","#6b7280","#94a3b8"];
   const byCategory = CATEGORIES.map((cat,i)=>({
-    label:cat, value:invoices.filter(inv=>inv.category===cat).reduce((s,i)=>s+Number(i.amount),0), color:CHART_COLORS[i%CHART_COLORS.length],
+    label:cat, value:filteredInvoices.filter(inv=>inv.category===cat).reduce((s,i)=>s+Number(i.amount),0), color:CHART_COLORS[i%CHART_COLORS.length],
   })).filter(x=>x.value>0).sort((a,b)=>b.value-a.value);
 
   const recent = [...invoices].sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,5);
-  const topVendors = vendors.map(v=>({ label:v.name, value:invoices.filter(i=>i.vendorId===v.id).reduce((s,i)=>s+Number(i.amount),0), color:"#e07b39" })).filter(v=>v.value>0).sort((a,b)=>b.value-a.value).slice(0,6);
+  const topVendors = vendors.map(v=>({ label:v.name, value:filteredInvoices.filter(i=>i.vendorId===v.id).reduce((s,i)=>s+Number(i.amount),0), color:"#e07b39" })).filter(v=>v.value>0).sort((a,b)=>b.value-a.value).slice(0,6);
+
+  const YearPicker = () => (
+    <div style={{ display:"flex",gap:"0.35rem",alignItems:"center",flexWrap:"wrap" }}>
+      {["all",...availableYears].map(yr=>(
+        <button key={yr} onClick={()=>setChartYear(String(yr))}
+          style={{ padding:"3px 10px",borderRadius:"6px",border:`1px solid ${String(chartYear)===String(yr)?"#e07b39":"#2a2f3d"}`,background:String(chartYear)===String(yr)?"#e07b3922":"#0d1117",color:String(chartYear)===String(yr)?"#e07b39":"#6b7280",cursor:"pointer",fontSize:"0.72rem",fontWeight:String(chartYear)===String(yr)?700:400 }}>
+          {yr==="all"?"All Years":yr}
+        </button>
+      ))}
+    </div>
+  );
 
   return (
     <div>
@@ -771,9 +796,16 @@ function Dashboard({ properties, invoices, vendors, tenants, projects, isAdmin, 
           <Icon name="eye" size={13}/>Viewing dashboard for <strong>{viewingAs.full_name||viewingAs.email}</strong>
         </div>
       )}
+
+      {/* Year filter */}
+      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1.25rem",flexWrap:"wrap",gap:"0.5rem" }}>
+        <div style={{ fontSize:"0.7rem",fontWeight:700,color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.07em" }}>Year</div>
+        <YearPicker/>
+      </div>
+
       <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(148px,1fr))",gap:"1rem",marginBottom:"1.5rem" }}>
         {[
-          { label:"Total Expenses", value:fmt(grandExpense), accent:"#e07b39" },
+          { label:`Expenses${chartYear!=="all"?` ${chartYear}`:""}`, value:fmt(grandExpense), accent:"#e07b39" },
           { label:"Rent Income", value:fmt(totalRentIncome), accent:"#4a7c59" },
           { label:"Net Income", value:fmt(netIncome), accent:netIncome>=0?"#4a7c59":"#f87171" },
           { label:"Active Tenants", value:activeTenants.length, accent:"#3b6fa0" },
@@ -787,12 +819,12 @@ function Dashboard({ properties, invoices, vendors, tenants, projects, isAdmin, 
         ))}
       </div>
 
-      <ChartCard title="Monthly Spend vs. Income — Last 12 Months" style={{ marginBottom:"1.25rem" }}>
-        <SparkLine invoices={invoices} tenants={tenants} months={12} height={100}/>
+      <ChartCard title={`Monthly Spend vs. Income — ${chartYear==="all"?"Last 12 Months":chartYear}`} style={{ marginBottom:"1.25rem" }}>
+        <SparkLine invoices={filteredInvoices} tenants={tenants} months={chartYear==="all"?12:12} height={100} year={chartYear==="all"?null:Number(chartYear)}/>
       </ChartCard>
 
       <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:"1.25rem",marginBottom:"1.25rem" }}>
-        <ChartCard title="Income vs. Expenses by Property">
+        <ChartCard title={`Income vs. Expenses by Property${chartYear!=="all"?` — ${chartYear}`:""}`}>
           <GroupedBarChart data={propTotals} height={180}/>
           {propTotals.map(p=>(
             <div key={p.id} style={{ display:"flex",justifyContent:"space-between",alignItems:"center",padding:"0.3rem 0",borderBottom:"1px solid #1a1f2b" }}>
@@ -801,13 +833,13 @@ function Dashboard({ properties, invoices, vendors, tenants, projects, isAdmin, 
             </div>
           ))}
         </ChartCard>
-        <ChartCard title="Expenses by Category">
+        <ChartCard title={`Expenses by Category${chartYear!=="all"?` — ${chartYear}`:""}`}>
           <DonutChart data={byCategory.slice(0,8)} size={140} thickness={24}/>
         </ChartCard>
       </div>
 
       <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:"1.25rem",marginBottom:"1.25rem" }}>
-        <ChartCard title="Top Vendors by Spend">
+        <ChartCard title={`Top Vendors by Spend${chartYear!=="all"?` — ${chartYear}`:""}`}>
           <HBarChart data={topVendors} colorKey="color" valueKey="value" labelKey="label"/>
         </ChartCard>
         <ChartCard title="Recent Invoices">
@@ -1295,6 +1327,10 @@ function Properties({ properties, isAdmin, viewingAs, onAdd, onUpdate, onDelete,
     return <PropertyDetail property={live} invoices={invoices} tenants={tenants} projects={projects||[]} vendors={vendors||[]} isAdmin={isAdmin} onUpdate={onUpdate} onDelete={async(id)=>{ await onDelete(id); setSelectedProperty(null); }} onBack={()=>setSelectedProperty(null)} onViewProject={(id)=>setSelectedProject(id)}/>;
   }
 
+  const [propChartYear, setPropChartYear] = useState("all");
+  const propYears = [...new Set(invoices.map(i=>i.date?new Date(i.date).getFullYear():null).filter(Boolean))].sort((a,b)=>b-a);
+  const propFilteredInvoices = propChartYear==="all" ? invoices : invoices.filter(i=>i.date && new Date(i.date).getFullYear()===Number(propChartYear));
+
   function openAdd() { setForm(blank); setModal("add"); }
   async function handleSave() {
     if (!form.name.trim()) return;
@@ -1312,13 +1348,25 @@ function Properties({ properties, isAdmin, viewingAs, onAdd, onUpdate, onDelete,
       {!readOnly && <PropertyDropZone onConfirm={f=>onAdd(f)}/>}
 
       {properties.length>0 && (
-        <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:"1.25rem",marginBottom:"1.5rem" }}>
-          <ChartCard title="Expenses by Property">
-            <HBarChart data={properties.map(p=>({ label:p.name, value:invoices.filter(i=>i.propertyId===p.id).reduce((s,i)=>s+Number(i.amount),0), color:p.color })).filter(d=>d.value>0).sort((a,b)=>b.value-a.value)} colorKey="color" valueKey="value" labelKey="label"/>
-          </ChartCard>
-          <ChartCard title="Income vs. Expenses">
-            <GroupedBarChart data={properties.map(p=>({ name:p.name, income:tenants.filter(t=>t.propertyId===p.id&&leaseStatus(t.leaseStart,t.leaseEnd)==="active").reduce((s,t)=>s+leaseTotalRent(t),0), expense:invoices.filter(i=>i.propertyId===p.id).reduce((s,i)=>s+Number(i.amount),0) }))} height={160}/>
-          </ChartCard>
+        <div style={{ marginBottom:"1.5rem" }}>
+          {/* Year picker */}
+          <div style={{ display:"flex",alignItems:"center",gap:"0.35rem",marginBottom:"0.75rem",flexWrap:"wrap" }}>
+            <span style={{ fontSize:"0.68rem",fontWeight:700,color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.05em",marginRight:"0.25rem" }}>Year:</span>
+            {["all",...propYears].map(yr=>(
+              <button key={yr} onClick={()=>setPropChartYear(String(yr))}
+                style={{ padding:"3px 10px",borderRadius:"6px",border:`1px solid ${String(propChartYear)===String(yr)?"#e07b39":"#2a2f3d"}`,background:String(propChartYear)===String(yr)?"#e07b3922":"#0d1117",color:String(propChartYear)===String(yr)?"#e07b39":"#6b7280",cursor:"pointer",fontSize:"0.72rem",fontWeight:String(propChartYear)===String(yr)?700:400 }}>
+                {yr==="all"?"All Years":yr}
+              </button>
+            ))}
+          </div>
+          <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:"1.25rem" }}>
+            <ChartCard title={`Expenses by Property${propChartYear!=="all"?` — ${propChartYear}`:""}`}>
+              <HBarChart data={properties.map(p=>({ label:p.name, value:propFilteredInvoices.filter(i=>i.propertyId===p.id).reduce((s,i)=>s+Number(i.amount),0), color:p.color })).filter(d=>d.value>0).sort((a,b)=>b.value-a.value)} colorKey="color" valueKey="value" labelKey="label"/>
+            </ChartCard>
+            <ChartCard title={`Income vs. Expenses${propChartYear!=="all"?` — ${propChartYear}`:""}`}>
+              <GroupedBarChart data={properties.map(p=>({ name:p.name, income:tenants.filter(t=>t.propertyId===p.id&&leaseStatus(t.leaseStart,t.leaseEnd)==="active").reduce((s,t)=>s+leaseTotalRent(t),0), expense:propFilteredInvoices.filter(i=>i.propertyId===p.id).reduce((s,i)=>s+Number(i.amount),0) }))} height={160}/>
+            </ChartCard>
+          </div>
         </div>
       )}
       {properties.length===0 && <div style={{ color:"#4b5563",fontSize:"0.9rem",padding:"2rem 0",textAlign:"center" }}>No properties yet.</div>}
@@ -1401,7 +1449,7 @@ function Tenants({ tenants, properties, viewingAs, onAdd, onUpdate, onDelete }) 
         <div style={{ display:"flex",gap:"0.5rem",alignItems:"center",flexWrap:"wrap" }}>
           <select style={{...inputStyle,width:"auto"}} value={filterProp} onChange={e=>setFilterProp(e.target.value)}>
             <option value="all">All Properties</option>
-            {properties.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+            {[...properties].sort((a,b)=>a.name.localeCompare(b.name)).map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
           <select style={{...inputStyle,width:"auto"}} value={filterStatus} onChange={e=>setFilterStatus(e.target.value)}>
             <option value="all">All Statuses</option>
@@ -1478,7 +1526,7 @@ function Tenants({ tenants, properties, viewingAs, onAdd, onUpdate, onDelete }) 
           </Grid2>
           <SectionDivider label="Property & Lease"/>
           <Grid2>
-            <Field label="Property"><select style={inputStyle} value={form.propertyId} onChange={e=>setForm(f=>({...f,propertyId:e.target.value}))}><option value="">Select…</option>{properties.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></Field>
+            <Field label="Property"><select style={inputStyle} value={form.propertyId} onChange={e=>setForm(f=>({...f,propertyId:e.target.value}))}><option value="">Select…</option>{[...properties].sort((a,b)=>a.name.localeCompare(b.name)).map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></Field>
             <Field label="Unit (optional)"><input style={inputStyle} value={form.unit} onChange={e=>setForm(f=>({...f,unit:e.target.value}))} placeholder="Unit 2B"/></Field>
           </Grid2>
           <Grid2>
@@ -1669,14 +1717,14 @@ function BulkInvoiceUpload({ vendors, properties, projects, onConfirmAll, onClos
                           <label style={labelStyle}>Vendor</label>
                           <select style={inputStyle} value={item.form.vendorId} onChange={e=>updateForm(item.id,{vendorId:e.target.value})}>
                             <option value="">— None —</option>
-                            {vendors.map(v=><option key={v.id} value={v.id}>{v.name}</option>)}
+                            {[...vendors].sort((a,b)=>a.name.localeCompare(b.name)).map(v=><option key={v.id} value={v.id}>{v.name}</option>)}
                           </select>
                         </div>
                         <div>
                           <label style={labelStyle}>Property</label>
                           <select style={inputStyle} value={item.form.propertyId} onChange={e=>updateForm(item.id,{propertyId:e.target.value})}>
                             <option value="">Select…</option>
-                            {properties.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+                            {[...properties].sort((a,b)=>a.name.localeCompare(b.name)).map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
                           </select>
                         </div>
                         <div>
@@ -1955,7 +2003,7 @@ function VendorDetail({ vendor, invoices, properties, projects, isAdmin, onUpdat
       {editingInvoice && invForm && onUpdateInvoice && (
         <Modal title="Edit Invoice" onClose={()=>{setEditingInvoice(null);setInvForm(null);setPendingFile(null);}} wide>
           <Grid2>
-            <Field label="Property"><select style={inputStyle} value={invForm.propertyId||""} onChange={e=>setInvForm(f=>({...f,propertyId:e.target.value}))}><option value="">Select…</option>{properties.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></Field>
+            <Field label="Property"><select style={inputStyle} value={invForm.propertyId||""} onChange={e=>setInvForm(f=>({...f,propertyId:e.target.value}))}><option value="">Select…</option>{[...properties].sort((a,b)=>a.name.localeCompare(b.name)).map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></Field>
             <Field label="Category"><select style={inputStyle} value={invForm.category} onChange={e=>setInvForm(f=>({...f,category:e.target.value}))}>{CATEGORIES.map(c=><option key={c}>{c}</option>)}</select></Field>
           </Grid2>
           <Grid2>
@@ -2191,7 +2239,7 @@ function Invoices({ invoices, properties, vendors, projects, viewingAs, isAdmin,
       <div style={{ background:"#0d1117",border:"1px solid #1e2430",borderRadius:"10px",padding:"0.75rem 1rem",marginBottom:"1rem",display:"flex",flexWrap:"wrap",gap:"0.5rem",alignItems:"center" }}>
         <select style={{...inputStyle,width:"auto",flex:"0 0 auto"}} value={filterProp} onChange={e=>setFilterProp(e.target.value)}>
           <option value="all">All Properties</option>
-          {properties.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+          {[...properties].sort((a,b)=>a.name.localeCompare(b.name)).map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
         <select style={{...inputStyle,width:"auto",flex:"0 0 auto"}} value={filterCat} onChange={e=>setFilterCat(e.target.value)}>
           <option value="all">All Categories</option>
@@ -2262,8 +2310,8 @@ function Invoices({ invoices, properties, vendors, projects, viewingAs, isAdmin,
       {modal && !readOnly && (
         <Modal title={modal==="add"?"Add Invoice":"Edit Invoice"} onClose={()=>{setModal(null);setPendingFile(null);}} wide>
           <Grid2>
-            <Field label="Property"><select style={inputStyle} value={form.propertyId} onChange={e=>setForm(f=>({...f,propertyId:e.target.value}))}><option value="">Select…</option>{properties.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></Field>
-            <Field label="Vendor"><select style={inputStyle} value={form.vendorId} onChange={e=>setForm(f=>({...f,vendorId:e.target.value}))}><option value="">Select…</option>{vendors.map(v=><option key={v.id} value={v.id}>{v.name}</option>)}</select></Field>
+            <Field label="Property"><select style={inputStyle} value={form.propertyId} onChange={e=>setForm(f=>({...f,propertyId:e.target.value}))}><option value="">Select…</option>{[...properties].sort((a,b)=>a.name.localeCompare(b.name)).map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></Field>
+            <Field label="Vendor"><select style={inputStyle} value={form.vendorId} onChange={e=>setForm(f=>({...f,vendorId:e.target.value}))}><option value="">Select…</option>{[...vendors].sort((a,b)=>a.name.localeCompare(b.name)).map(v=><option key={v.id} value={v.id}>{v.name}</option>)}</select></Field>
           </Grid2>
           <Grid2>
             <Field label="Category"><select style={inputStyle} value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))}>{CATEGORIES.map(c=><option key={c}>{c}</option>)}</select></Field>
@@ -2333,6 +2381,10 @@ function Invoices({ invoices, properties, vendors, projects, viewingAs, isAdmin,
 
           <div style={{ display:"flex",gap:"0.75rem",justifyContent:"flex-end",marginTop:"0.5rem" }}>
             {modal!=="add"&&<BtnDanger onClick={()=>handleDelete(modal.id)}><Icon name="trash" size={14}/>Delete</BtnDanger>}
+            {modal!=="add"&&<BtnSecondary onClick={()=>{
+              const duped={...form,id:undefined,invoiceNumber:"",fileName:null,fileUrl:null,filePath:null};
+              setForm(duped); setModal("add"); setPendingFile(null);
+            }}><Icon name="clipboard" size={13}/>Duplicate</BtnSecondary>}
             <BtnPrimary onClick={handleSave} disabled={uploading}>
               {uploading&&<Spinner/>}
               {uploading?"Uploading…":"Save Invoice"}
@@ -2469,7 +2521,7 @@ function Projects({ projects, properties, vendors, invoices, viewingAs, isAdmin,
         }
         const isUtilities = p => /utilit/i.test(p.name);
         const isHOA = p => /hoa|tax|insurance/i.test(p.name);
-        const isRemodel = p => /remodel|renovati|addition|construc/i.test(p.name);
+        const isRemodel = p => /remodel|renovati|addition|construc|home.?improv|improvement/i.test(p.name);
         const isMaint = p => !isUtilities(p) && !isHOA(p) && !isRemodel(p);
 
         // Get all unique properties that have at least one filtered project, sorted A-Z
@@ -2552,7 +2604,7 @@ function Projects({ projects, properties, vendors, invoices, viewingAs, isAdmin,
           <Field label="Project Name"><input style={inputStyle} value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="e.g. Kitchen Renovation"/></Field>
           <Field label="Description"><textarea style={{...inputStyle,resize:"vertical",minHeight:"60px"}} value={form.description} onChange={e=>setForm(f=>({...f,description:e.target.value}))} placeholder="What's being done?"/></Field>
           <Grid2>
-            <Field label="Property"><select style={inputStyle} value={form.propertyId} onChange={e=>setForm(f=>({...f,propertyId:e.target.value}))}><option value="">Select…</option>{properties.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></Field>
+            <Field label="Property"><select style={inputStyle} value={form.propertyId} onChange={e=>setForm(f=>({...f,propertyId:e.target.value}))}><option value="">Select…</option>{[...properties].sort((a,b)=>a.name.localeCompare(b.name)).map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></Field>
             <Field label="Status"><select style={inputStyle} value={form.status} onChange={e=>setForm(f=>({...f,status:e.target.value}))}>{PROJECT_STATUSES.map(s=><option key={s}>{s}</option>)}</select></Field>
           </Grid2>
           <Grid2>
@@ -2700,7 +2752,7 @@ function ProjectDetail({ project, projects, vendors, properties, invoices, readO
           <Field label="Task Title"><input style={inputStyle} value={taskForm.title} onChange={e=>setTaskForm(f=>({...f,title:e.target.value}))} placeholder="e.g. Replace roof shingles"/></Field>
           <Grid2>
             <Field label="Task Type"><select style={inputStyle} value={taskForm.type} onChange={e=>setTaskForm(f=>({...f,type:e.target.value}))}>{TASK_TYPES.map(t=><option key={t}>{t}</option>)}</select></Field>
-            <Field label="Assigned Vendor"><select style={inputStyle} value={taskForm.vendorId} onChange={e=>setTaskForm(f=>({...f,vendorId:e.target.value}))}><option value="">None / TBD</option>{vendors.map(v=><option key={v.id} value={v.id}>{v.name}</option>)}</select></Field>
+            <Field label="Assigned Vendor"><select style={inputStyle} value={taskForm.vendorId} onChange={e=>setTaskForm(f=>({...f,vendorId:e.target.value}))}><option value="">None / TBD</option>{[...vendors].sort((a,b)=>a.name.localeCompare(b.name)).map(v=><option key={v.id} value={v.id}>{v.name}</option>)}</select></Field>
           </Grid2>
           <Grid2>
             <Field label="Budget ($)"><input style={inputStyle} type="number" value={taskForm.budget} onChange={e=>setTaskForm(f=>({...f,budget:e.target.value}))} placeholder="0"/></Field>
@@ -2719,7 +2771,7 @@ function ProjectDetail({ project, projects, vendors, properties, invoices, readO
           <Field label="Project Name"><input style={inputStyle} value={live.name} onChange={e=>onUpdate({...live,name:e.target.value})}/></Field>
           <Field label="Description"><textarea style={{...inputStyle,resize:"vertical",minHeight:"60px"}} value={live.description||""} onChange={e=>onUpdate({...live,description:e.target.value})}/></Field>
           <Grid2>
-            <Field label="Property"><select style={inputStyle} value={live.propertyId||""} onChange={e=>onUpdate({...live,propertyId:e.target.value})}><option value="">Select…</option>{properties.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></Field>
+            <Field label="Property"><select style={inputStyle} value={live.propertyId||""} onChange={e=>onUpdate({...live,propertyId:e.target.value})}><option value="">Select…</option>{[...properties].sort((a,b)=>a.name.localeCompare(b.name)).map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></Field>
             <Field label="Status"><select style={inputStyle} value={live.status} onChange={e=>onUpdate({...live,status:e.target.value})}>{PROJECT_STATUSES.map(s=><option key={s}>{s}</option>)}</select></Field>
           </Grid2>
           <Grid2>
@@ -2753,7 +2805,7 @@ function ProjectDetail({ project, projects, vendors, properties, invoices, readO
                 setMovingInvoice(null);
               }}>
               <option value="">— Remove from project —</option>
-              {projects.map(p=>{const prop=properties.find(x=>x.id===p.propertyId);return <option key={p.id} value={p.id}>{p.name}{prop?` — ${prop.name}`:""}{p.id===live.id?" (current)":""}</option>;})}
+              {[...projects].sort((a,b)=>a.name.localeCompare(b.name)).map(p=>{const prop=properties.find(x=>x.id===p.propertyId);return <option key={p.id} value={p.id}>{p.name}{prop?` — ${prop.name}`:""}</option>;})}
             </select>
           </Field>
           <div style={{ fontSize:"0.75rem",color:"#6b7280",marginTop:"-0.5rem" }}>Selecting a project moves the invoice immediately.</div>
