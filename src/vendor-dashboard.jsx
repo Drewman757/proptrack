@@ -379,14 +379,32 @@ async function parseInvoiceWithAI(file, vendors, properties, projects) {
   const b64 = await fileToBase64(file);
   const vendorList = vendors.map(v=>`${v.id}: ${v.name} (${v.category})`).join("\n");
   const propList = properties.map(p=>`${p.id}: ${p.name}`).join("\n");
-  const projList = projects.map(p=>`${p.id}: ${p.name}`).join("\n");
+  // Include property name with each project so AI can match correctly
+  const projList = projects.map(p=>{
+    const prop = properties.find(x=>x.id===p.propertyId);
+    return `${p.id}: ${p.name}${prop?` [property: ${prop.name}]`:""}`;
+  }).join("\n");
 
   const prompt = `You are an invoice data extractor for a property management app. Return ONLY valid JSON, no markdown.
 
-Known vendors: ${vendorList||"none"}
-Known properties: ${propList||"none"}
-Known projects: ${projList||"none"}
+Known vendors:
+${vendorList||"none"}
+
+Known properties:
+${propList||"none"}
+
+Known projects (each shows which property it belongs to):
+${projList||"none"}
+
 Valid categories: ${CATEGORIES.join(", ")}
+
+IMPORTANT rules for projectId:
+- Only set projectId if you are confident the invoice matches that specific project
+- The project's property MUST match the propertyId you select — never pick a project from a different property
+- If the invoice is a utility bill (electric, water, gas, internet, trash), pick the Utilities project for the matched property
+- If the invoice is for lawn care, pool, cleaning, HVAC, pest control, pick the Maintenance Services project for the matched property
+- If the invoice is for HOA fees, property taxes, or insurance, pick the HOA / Taxes / Insurance project for the matched property
+- If unsure, set projectId to null
 
 Return this exact JSON:
 {"vendorId":null,"vendorNameRaw":"","propertyId":null,"projectId":null,"amount":0,"date":"YYYY-MM-DD","category":"Other","description":"","invoiceNumber":null,"confidence":"medium"}`;
@@ -397,7 +415,17 @@ Return this exact JSON:
   if (!resp.ok) { const errText = await resp.text().catch(()=>""); throw new Error(`API error ${resp.status}${errText?" — "+errText:""}`); }
   const data = await resp.json();
   const text = data.content?.map(c=>c.text||"").join("")||"";
-  return JSON.parse(text.replace(/```json|```/g,"").trim());
+  const result = JSON.parse(text.replace(/```json|```/g,"").trim());
+
+  // Client-side safety: clear projectId if it belongs to a different property than the resolved propertyId
+  if (result.projectId && result.propertyId) {
+    const matchedProject = projects.find(p=>p.id===result.projectId);
+    if (matchedProject && matchedProject.propertyId !== result.propertyId) {
+      result.projectId = null; // reject the cross-property assignment
+    }
+  }
+
+  return result;
 }
 
 function InvoiceDropZone({ vendors, properties, projects, onConfirm }) {
@@ -419,7 +447,12 @@ function InvoiceDropZone({ vendors, properties, projects, onConfirm }) {
     try {
       const result = await parseInvoiceWithAI(f, vendors, properties, projects);
       setParsed(result);
-      setForm({ vendorId:result.vendorId||"", vendorNameRaw:result.vendorNameRaw||"", propertyId:result.propertyId||(properties[0]?.id||""), projectId:result.projectId||"", amount:result.amount!=null?String(result.amount):"", date:result.date||new Date().toISOString().slice(0,10), category:CATEGORIES.includes(result.category)?result.category:CATEGORIES[0], description:result.description||"", invoiceNumber:result.invoiceNumber||"", fileName:f.name, recurring:"one-time" });
+      // Resolve final propertyId — use AI result if valid, else first property
+      const resolvedPropertyId = result.propertyId||(properties[0]?.id||"");
+      // Guard: only use projectId if it actually belongs to the resolved property
+      const resolvedProject = projects.find(p=>p.id===result.projectId);
+      const safeProjectId = (resolvedProject && resolvedProject.propertyId===resolvedPropertyId) ? result.projectId : "";
+      setForm({ vendorId:result.vendorId||"", vendorNameRaw:result.vendorNameRaw||"", propertyId:resolvedPropertyId, projectId:safeProjectId, amount:result.amount!=null?String(result.amount):"", date:result.date||new Date().toISOString().slice(0,10), category:CATEGORIES.includes(result.category)?result.category:CATEGORIES[0], description:result.description||"", invoiceNumber:result.invoiceNumber||"", fileName:f.name, recurring:"one-time" });
     } catch(e) { setError(e.message||"Failed to parse invoice."); }
     finally { setParsing(false); }
   }
@@ -487,7 +520,13 @@ function InvoiceDropZone({ vendors, properties, projects, onConfirm }) {
               <SectionDivider label="Assignment"/>
               <Grid2>
                 <Field label="Property">
-                  <select style={inputStyle} value={form.propertyId} onChange={e=>setForm(f=>({...f,propertyId:e.target.value}))}>
+                  <select style={inputStyle} value={form.propertyId} onChange={e=>{
+                    const newPropId = e.target.value;
+                    // Clear project if it doesn't belong to the newly selected property
+                    const currentProj = projects.find(p=>p.id===form.projectId);
+                    const keepProject = currentProj && currentProj.propertyId===newPropId;
+                    setForm(f=>({...f, propertyId:newPropId, projectId:keepProject?f.projectId:""}));
+                  }}>
                     <option value="">Select…</option>
                     {[...properties].sort((a,b)=>a.name.localeCompare(b.name)).map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
                   </select>
@@ -495,7 +534,7 @@ function InvoiceDropZone({ vendors, properties, projects, onConfirm }) {
                 <Field label="Project (optional)">
                   <select style={inputStyle} value={form.projectId} onChange={e=>setForm(f=>({...f,projectId:e.target.value}))}>
                     <option value="">— None —</option>
-                    {[...projects].sort((a,b)=>a.name.localeCompare(b.name)).map(p=>{const prop=properties.find(x=>x.id===p.propertyId);return <option key={p.id} value={p.id}>{p.name}{prop?` — ${prop.name}`:""}</option>;})}
+                    {[...projects].filter(p=>!form.propertyId||p.propertyId===form.propertyId).sort((a,b)=>a.name.localeCompare(b.name)).map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
                   </select>
                 </Field>
               </Grid2>
