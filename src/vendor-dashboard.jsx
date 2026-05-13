@@ -961,7 +961,7 @@ function PropertyDropZone({ onConfirm }) {
 }
 
 // ─── Property Detail View ─────────────────────────────────────────────────────
-function PropertyDetail({ property, invoices, tenants, projects, vendors, isAdmin, onUpdate, onDelete, onBack }) {
+function PropertyDetail({ property, invoices, tenants, projects, vendors, isAdmin, onUpdate, onDelete, onBack, onViewProject }) {
   const [editModal, setEditModal] = useState(false);
   const [form, setForm] = useState({...property});
   const [activeSection, setActiveSection] = useState("overview");
@@ -1128,8 +1128,43 @@ function PropertyDetail({ property, invoices, tenants, projects, vendors, isAdmi
                 const color = PROJECT_STATUS_COLORS[p.status]||"#6b7280";
                 const budget = tasks.reduce((s,t)=>s+Number(t.budget||0),0);
                 const actual = tasks.reduce((s,t)=>s+Number(t.actual||0),0);
+                const projInvoices = invoices.filter(i=>i.projectId===p.id);
+                const invoiceTotal = projInvoices.reduce((s,i)=>s+Number(i.amount),0);
+
+                // Cost estimates for Utilities project
+                const isUtilities = p.name==="Utilities";
+                // Cost estimates for HOA/Taxes/Insurance project
+                const isHOA = p.name==="HOA / Taxes / Insurance";
+
+                // Monthly cost: sum of monthly invoices + quarterly/12 + annual/12
+                function estimatedMonthlyCost(invList) {
+                  return invList.reduce((s,i)=>{
+                    const amt = Number(i.amount)||0;
+                    if (i.recurring==="monthly") return s+amt;
+                    if (i.recurring==="quarterly") return s+(amt/3);
+                    if (i.recurring==="annually") return s+(amt/12);
+                    return s; // one-time excluded
+                  },0);
+                }
+                function estimatedAnnualCost(invList) {
+                  return invList.reduce((s,i)=>{
+                    const amt = Number(i.amount)||0;
+                    if (i.recurring==="monthly") return s+(amt*12);
+                    if (i.recurring==="quarterly") return s+(amt*4);
+                    if (i.recurring==="annually") return s+amt;
+                    return s;
+                  },0);
+                }
+
+                const estMonthly = estimatedMonthlyCost(projInvoices);
+                const estAnnual = estimatedAnnualCost(projInvoices);
+
                 return (
-                  <div key={p.id} style={{ background:"#14181f",border:"1px solid #1e2430",borderRadius:"12px",padding:"1.25rem",borderTop:`3px solid ${color}` }}>
+                  <div key={p.id}
+                    onClick={()=>onViewProject&&onViewProject(p.id)}
+                    style={{ background:"#14181f",border:"1px solid #1e2430",borderRadius:"12px",padding:"1.25rem",borderTop:`3px solid ${color}`,cursor:onViewProject?"pointer":"default" }}
+                    onMouseEnter={e=>onViewProject&&(e.currentTarget.style.borderColor="#2a3a4d")}
+                    onMouseLeave={e=>e.currentTarget.style.borderColor="#1e2430"}>
                     <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"0.5rem" }}>
                       <div style={{ fontWeight:700,fontSize:"0.95rem",color:"#e8eaf0",flex:1,paddingRight:"0.5rem" }}>{p.name}</div>
                       <Badge color={color} label={p.status}/>
@@ -1139,10 +1174,32 @@ function PropertyDetail({ property, invoices, tenants, projects, vendors, isAdmi
                       <div style={{ display:"flex",justifyContent:"space-between",fontSize:"0.68rem",color:"#6b7280",marginBottom:"4px" }}><span>{done}/{tasks.length} tasks</span><span>{pct}%</span></div>
                       <div style={{ height:"4px",background:"#1e2430",borderRadius:"99px",overflow:"hidden" }}><div style={{ height:"100%",width:`${pct}%`,background:pct===100?"#4a7c59":"#e07b39",borderRadius:"99px" }}/></div>
                     </div>}
-                    {(budget>0||actual>0)&&<div style={{ display:"flex",gap:"1rem" }}>
+                    {(budget>0||actual>0)&&<div style={{ display:"flex",gap:"1rem",marginBottom:"0.75rem" }}>
                       {budget>0&&<div><div style={{ fontSize:"0.62rem",color:"#6b7280",textTransform:"uppercase" }}>Budget</div><div style={{ fontSize:"0.85rem",fontWeight:600,color:"#e07b39",fontFamily:"'DM Mono',monospace" }}>{fmt(budget)}</div></div>}
                       {actual>0&&<div><div style={{ fontSize:"0.62rem",color:"#6b7280",textTransform:"uppercase" }}>Actual</div><div style={{ fontSize:"0.85rem",fontWeight:600,color:actual>budget?"#f87171":"#4a7c59",fontFamily:"'DM Mono',monospace" }}>{fmt(actual)}</div></div>}
                     </div>}
+
+                    {/* Cost estimates for Utilities */}
+                    {isUtilities&&(estMonthly>0||estAnnual>0)&&(
+                      <div style={{ marginTop:"0.5rem",paddingTop:"0.65rem",borderTop:"1px solid #1a1f2b" }}>
+                        <div style={{ fontSize:"0.62rem",color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:"0.4rem" }}>Estimated Recurring Cost</div>
+                        <div style={{ display:"flex",gap:"1rem" }}>
+                          {estMonthly>0&&<div><div style={{ fontSize:"0.6rem",color:"#6b7280",textTransform:"uppercase" }}>Monthly</div><div style={{ fontSize:"0.9rem",fontWeight:700,color:"#8b5cf6",fontFamily:"'DM Mono',monospace" }}>{fmt(estMonthly)}/mo</div></div>}
+                          {estAnnual>0&&<div><div style={{ fontSize:"0.6rem",color:"#6b7280",textTransform:"uppercase" }}>Annual</div><div style={{ fontSize:"0.9rem",fontWeight:700,color:"#0891b2",fontFamily:"'DM Mono',monospace" }}>{fmt(estAnnual)}/yr</div></div>}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Cost estimates for HOA / Taxes / Insurance — annual only */}
+                    {isHOA&&estAnnual>0&&(
+                      <div style={{ marginTop:"0.5rem",paddingTop:"0.65rem",borderTop:"1px solid #1a1f2b" }}>
+                        <div style={{ fontSize:"0.62rem",color:"#6b7280",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:"0.4rem" }}>Estimated Annual Cost</div>
+                        <div style={{ fontSize:"0.9rem",fontWeight:700,color:"#0891b2",fontFamily:"'DM Mono',monospace" }}>{fmt(estAnnual)}/yr</div>
+                      </div>
+                    )}
+
+                    {invoiceTotal>0&&<div style={{ marginTop:"0.5rem",fontSize:"0.68rem",color:"#4b5563" }}>{projInvoices.length} invoice{projInvoices.length!==1?"s":""} · {fmt(invoiceTotal)} total</div>}
+                    {onViewProject&&<div style={{ marginTop:"0.35rem",fontSize:"0.68rem",color:"#4b5563" }}>Click to view project →</div>}
                   </div>
                 );
               })}
@@ -1203,17 +1260,33 @@ function PropertyDetail({ property, invoices, tenants, projects, vendors, isAdmi
 }
 
 // ─── Properties ───────────────────────────────────────────────────────────────
-function Properties({ properties, isAdmin, viewingAs, onAdd, onUpdate, onDelete, invoices, tenants, projects, vendors }) {
+function Properties({ properties, isAdmin, viewingAs, onAdd, onUpdate, onDelete, invoices, tenants, projects, vendors, onUpdateProject, onDeleteProject, onAddInvoice, onUpdateInvoice }) {
   const [selectedProperty, setSelectedProperty] = useState(null);
+  const [selectedProject, setSelectedProject] = useState(null);
   const [modal, setModal] = useState(null);
   const blank = { name:"",address:"",city:"",state:"FL",color:PROPERTY_COLORS[0] };
   const [form, setForm] = useState(blank);
   const readOnly = !!viewingAs;
 
+  // If a project is selected, render it in detail view
+  if (selectedProject) {
+    const liveProj = projects.find(p=>p.id===selectedProject);
+    if (!liveProj) { setSelectedProject(null); return null; }
+    return <ProjectDetail
+      project={liveProj} projects={projects} vendors={vendors||[]} properties={properties}
+      invoices={invoices} readOnly={readOnly} isAdmin={isAdmin}
+      onUpdate={onUpdateProject||(() =>{})}
+      onDelete={onDeleteProject||(() =>{})}
+      onAddInvoice={onAddInvoice||(() =>{})}
+      onUpdateInvoice={onUpdateInvoice||(() =>{})}
+      backLabel="Back to Property"
+      onBack={()=>setSelectedProject(null)}/>;
+  }
+
   if (selectedProperty) {
     const live = properties.find(p=>p.id===selectedProperty);
     if (!live) { setSelectedProperty(null); return null; }
-    return <PropertyDetail property={live} invoices={invoices} tenants={tenants} projects={projects||[]} vendors={vendors||[]} isAdmin={isAdmin} onUpdate={onUpdate} onDelete={async(id)=>{ await onDelete(id); setSelectedProperty(null); }} onBack={()=>setSelectedProperty(null)}/>;
+    return <PropertyDetail property={live} invoices={invoices} tenants={tenants} projects={projects||[]} vendors={vendors||[]} isAdmin={isAdmin} onUpdate={onUpdate} onDelete={async(id)=>{ await onDelete(id); setSelectedProperty(null); }} onBack={()=>setSelectedProperty(null)} onViewProject={(id)=>setSelectedProject(id)}/>;
   }
 
   function openAdd() { setForm(blank); setModal("add"); }
@@ -2449,7 +2522,7 @@ function Projects({ projects, properties, vendors, invoices, viewingAs, isAdmin,
 }
 
 // ─── Project Detail ───────────────────────────────────────────────────────────
-function ProjectDetail({ project, projects, vendors, properties, invoices, readOnly, isAdmin, onUpdate, onDelete, onAddInvoice, onUpdateInvoice, onBack }) {
+function ProjectDetail({ project, projects, vendors, properties, invoices, readOnly, isAdmin, onUpdate, onDelete, onAddInvoice, onUpdateInvoice, onBack, backLabel }) {
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [movingInvoice, setMovingInvoice] = useState(null);
@@ -2482,7 +2555,7 @@ function ProjectDetail({ project, projects, vendors, properties, invoices, readO
       {lightbox&&<div onClick={()=>setLightbox(null)} style={{ position:"fixed",inset:0,background:"rgba(0,0,0,0.92)",zIndex:2000,display:"flex",alignItems:"center",justifyContent:"center",cursor:"zoom-out" }}><img src={lightbox} alt="" style={{ maxWidth:"90vw",maxHeight:"90vh",borderRadius:"8px",objectFit:"contain" }}/></div>}
 
       <button onClick={onBack} style={{ display:"flex",alignItems:"center",gap:"6px",background:"none",border:"none",color:"#6b7280",cursor:"pointer",fontSize:"0.83rem",marginBottom:"1.25rem",padding:0 }}>
-        <Icon name="arrowLeft" size={14}/>Back to Projects
+        <Icon name="arrowLeft" size={14}/>{backLabel||"Back to Projects"}
       </button>
 
       <div style={{ background:"#14181f",border:"1px solid #1e2430",borderRadius:"14px",padding:"1.5rem",marginBottom:"1.25rem",borderTop:`3px solid ${color}` }}>
@@ -2965,7 +3038,7 @@ export default function App() {
         {/* Page content */}
         <div className="page-content" style={{ maxWidth:"980px",margin:"0 auto",padding:"1.75rem 1.25rem" }}>
           {tab==="dashboard"   && <Dashboard properties={properties} invoices={invoices} vendors={vendors} tenants={tenants} projects={projects} isAdmin={isAdmin} viewingAs={viewingAs}/>}
-          {tab==="properties"  && <Properties properties={properties} isAdmin={isAdmin} viewingAs={viewingAs} onAdd={addProperty} onUpdate={updateProperty} onDelete={deleteProperty} invoices={invoices} tenants={tenants} projects={projects} vendors={vendors}/>}
+          {tab==="properties"  && <Properties properties={properties} isAdmin={isAdmin} viewingAs={viewingAs} onAdd={addProperty} onUpdate={updateProperty} onDelete={deleteProperty} invoices={invoices} tenants={tenants} projects={projects} vendors={vendors} onUpdateProject={updateProject} onDeleteProject={deleteProject} onAddInvoice={addInvoice} onUpdateInvoice={updateInvoice}/>}
           {tab==="tenants"     && <Tenants tenants={tenants} properties={properties} viewingAs={viewingAs} onAdd={addTenant} onUpdate={updateTenant} onDelete={deleteTenant}/>}
           {tab==="vendors"     && <Vendors vendors={vendors} isAdmin={isAdmin} invoices={invoices} properties={properties} projects={projects} onAdd={addVendor} onUpdate={updateVendor} onDelete={deleteVendor} onUpdateInvoice={updateInvoice}/>}
           {tab==="invoices"    && <Invoices invoices={invoices} properties={properties} vendors={vendors} projects={projects} viewingAs={viewingAs} isAdmin={isAdmin} onAdd={addInvoice} onUpdate={updateInvoice} onDelete={deleteInvoice}/>}
